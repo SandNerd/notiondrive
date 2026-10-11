@@ -9,6 +9,8 @@ import { loadConfig, loadProjectConfig, saveConfig, flattenManifest } from './co
 import { getSaveLocationOptions, isWritablePath, safeMerge } from './utils.js';
 import { downloadPages } from './download.js';
 import { executeSyncMode, startSyncWatchMode, executeStatus } from './sync.js';
+import { discoverDocuments } from './discovery.js';
+import { realpath } from 'node:fs/promises';
 
 /** Exit cleanly if the user cancels a prompt. */
 function exitIfCancelled(value) {
@@ -234,7 +236,10 @@ export function parseArgs(argv) {
     noCache: false,
     watchMode: false,
     statusMode: false,
+    discoverMode: false,
     statusFilter: null,
+    databaseId: null,
+    dataSourceId: null,
     onlyStatus: null,
     excludeDisabled: false,
     sinceDays: null,
@@ -253,7 +258,17 @@ export function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === 'sync') {
+    if (a === 'discover') {
+      out.discoverMode = true;
+    } else if (a === '--database') {
+      out.databaseFlagProvided = true;
+      out.databaseId = extractNotionId(argv[i + 1]);
+      i += 1;
+    } else if (a === '--data-source') {
+      out.dataSourceFlagProvided = true;
+      out.dataSourceId = argv[i + 1];
+      i += 1;
+    } else if (a === 'sync') {
       out.syncMode = true;
       // Capture an immediate trailing positional filter (e.g. `notiondrive sync sys-design`)
       const next = argv[i + 1];
@@ -419,6 +434,18 @@ export function resolveSyncManifest(projectConfig, savedConfig) {
   return null;
 }
 
+export function resolveDiscoverySource(args, discoveryConfig = {}) {
+  if (args.databaseFlagProvided && args.dataSourceFlagProvided) {
+    return { error: 'Specify only one of --database or --data-source.' };
+  }
+  const databaseId = args.databaseFlagProvided ? args.databaseId : args.dataSourceFlagProvided ? null : discoveryConfig.databaseId;
+  const dataSourceId = args.dataSourceFlagProvided ? args.dataSourceId : args.databaseFlagProvided ? null : discoveryConfig.dataSourceId;
+  if ((!databaseId && !dataSourceId) || (databaseId && dataSourceId)) {
+    return { error: 'Discovery requires exactly one databaseId/dataSourceId.' };
+  }
+  return { databaseId: databaseId || null, dataSourceId: dataSourceId || null };
+}
+
 export function getHeadlessExitCode(stats) {
   return stats?.errors?.length > 0 ? 1 : 0;
 }
@@ -447,6 +474,29 @@ export function loadLocalManifest() {
   }
 }
 
+async function runDiscovery(args, projectConfig, savedConfig, envToken) {
+  const jsonOutput = args.jsonOutput;
+  try {
+    const discoveryConfig = projectConfig?.discovery || savedConfig?.discovery || {};
+    const source = resolveDiscoverySource(args, discoveryConfig);
+    const token = args.token || envToken || projectConfig?.token || savedConfig?.token || null;
+    if (source.error || !token) throw new Error(source.error || 'Discovery requires exactly one databaseId/dataSourceId and a configured Notion token.');
+    const root = await realpath(path.resolve(args.out || process.cwd()));
+    const results = await discoverDocuments({ notion: new NotionClient(token), ...source, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
+    if (jsonOutput) console.log(JSON.stringify(results, null, 2));
+    else {
+      for (const result of results) console.log(`${result.status === 'mapped' ? 'OK' : 'REVIEW'}\t${result.pageId || '(missing ID)'}\t${result.path || result.reason}\t${result.title}`);
+      console.log(`\n${results.filter((item) => item.status === 'mapped').length} mapped; ${results.filter((item) => item.status !== 'mapped').length} require review.`);
+    }
+    process.exitCode = results.some((item) => item.status !== 'mapped') ? 1 : 0;
+  } catch (err) {
+    const message = `Discovery failed: ${err.message}`;
+    if (jsonOutput) console.log(JSON.stringify({ error: message }));
+    else p.log.error(message);
+    process.exitCode = 1;
+  }
+}
+
 export async function main(envToken = null) {
   const args = parseArgs(process.argv.slice(2));
   try {
@@ -459,6 +509,7 @@ export async function main(envToken = null) {
       'Commands:',
       '  sync                  Run batch download from notiondrive.config.json or ~/.notiondrive/config.json',
       '  status                Show sync status for manifest targets (supports name or group filtering)',
+      '  discover              Read-only database document inventory (--database <id> or --data-source <id> [--json])',
       '                        Project-local notiondrive.config.json takes precedence and can also provide token/defaultOutputDir',
       '                        You can limit which targets are processed by passing a positional filter',
       '                        after `sync` or by using the `--group` / `-g` flag.',
@@ -510,8 +561,23 @@ export async function main(envToken = null) {
   // Enable debug mode early so other modules can check env var
   if (args.debug) {
     process.env.DEBUG = '1';
-    p.log.info('Debug logging enabled (DEBUG=1)');
+    if (!(args.discoverMode && args.jsonOutput)) p.log.info('Debug logging enabled (DEBUG=1)');
   }
+  // Discovery is read-only: do not validate-and-save an explicit token or enter sync flows.
+  if (args.discoverMode) {
+    try {
+      const projectConfig = await loadProjectConfig();
+      const savedConfig = await loadConfig();
+      await runDiscovery(args, projectConfig, savedConfig, envToken);
+    } catch (err) {
+      const message = `Discovery failed: ${err.message}`;
+      if (args.jsonOutput) console.log(JSON.stringify({ error: message }));
+      else p.log.error(message);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   // If the user asked to read the source id/url from stdin (pipe/echo), do that now.
   if (args.source === '-') {
     // Read all stdin
@@ -527,8 +593,10 @@ export async function main(envToken = null) {
 
   // If requested, read the source id/url from the system clipboard (macOS)
   // Handled later as part of headless (--source) flow to centralize clipboard access.
-  console.log(BANNER);
-  p.intro('notiondrive v0.1.2');
+  if (!args.discoverMode || !args.jsonOutput) {
+    console.log(BANNER);
+    p.intro('notiondrive v0.1.2');
+  }
 
   // ── Prepare config/token ──────────────────────────────────────────
   const projectConfig = await loadProjectConfig();
@@ -556,6 +624,8 @@ export async function main(envToken = null) {
       process.exit(1);
     }
   }
+
+  // JSON discovery is handled before token validation or persistence.
 
   // If user supplied a new token via CLI flag, prefer and save it (after validation)
   let tokenSavedViaFlag = false;
@@ -599,6 +669,33 @@ export async function main(envToken = null) {
       process.exit(0);
     } catch (err) {
       p.log.error(err.message || String(err));
+      process.exit(1);
+    }
+  }
+
+  if (args.discoverMode) {
+    const discoveryConfig = projectConfig?.discovery || savedConfig?.discovery || {};
+    const source = resolveDiscoverySource(args, discoveryConfig);
+    token = token || savedConfig?.token || envToken || null;
+    if (source.error || !token) {
+      const message = source.error || 'Discovery requires exactly one databaseId/dataSourceId and a configured Notion token.';
+      if (args.jsonOutput) console.log(JSON.stringify({ error: message }));
+      else p.log.error(message);
+      process.exit(1);
+    }
+    try {
+      const notion = new NotionClient(token);
+      const root = await realpath(path.resolve(args.out || process.cwd()));
+      const results = await discoverDocuments({ notion, ...source, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
+      if (args.jsonOutput) console.log(JSON.stringify(results, null, 2));
+      else {
+        for (const result of results) console.log(`${result.status === 'mapped' ? 'OK' : 'REVIEW'}\t${result.pageId || '(missing ID)'}\t${result.path || result.reason}\t${result.title}`);
+        console.log(`\n${results.filter((item) => item.status === 'mapped').length} mapped; ${results.filter((item) => item.status !== 'mapped').length} require review.`);
+      }
+      process.exit(results.some((item) => item.status !== 'mapped') ? 1 : 0);
+    } catch (err) {
+      if (args.jsonOutput) console.log(JSON.stringify({ error: `Discovery failed: ${err.message}` }));
+      else p.log.error(`Discovery failed: ${err.message}`);
       process.exit(1);
     }
   }

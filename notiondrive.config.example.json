@@ -15,5 +15,13 @@
       "path": "./exports/database",
       "format": "flattened"
     }
-  ]
+  ],
+  "discovery": {
+    "databaseId": "90fabd95e17082e8a49f818c1160f390",
+    "properties": {
+      "filename": "Name",
+      "directory": "Repository Directory"
+    },
+    "overrides": []
+  }
 }

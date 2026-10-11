@@ -9,6 +9,9 @@
     "defaultOutputDir": {
       "type": "string"
     },
+    "discovery": {
+      "$ref": "#/definitions/discovery"
+    },
     "targets": {
       "type": "array",
       "items": {
@@ -141,6 +144,34 @@
     }
   },
   "definitions": {
+    "discovery": {
+      "type": "object",
+      "properties": {
+        "databaseId": { "type": "string" },
+        "dataSourceId": { "type": "string" },
+        "properties": {
+          "type": "object",
+          "properties": {
+            "filename": { "type": "string" },
+            "directory": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "overrides": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["pageId", "path"],
+            "properties": {
+              "pageId": { "type": "string" },
+              "path": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "targetItem": {
       "type": "object",
       "required": [
@@ -153,6 +184,9 @@
         },
         "path": {
           "type": "string"
+        },
+        "disabled": {
+          "type": "boolean"
         },
         "format": {
           "type": "string",
