@@ -474,7 +474,8 @@ export function loadLocalManifest() {
   }
 }
 
-async function runJsonDiscovery(args, projectConfig, savedConfig, envToken) {
+async function runDiscovery(args, projectConfig, savedConfig, envToken) {
+  const jsonOutput = args.jsonOutput;
   try {
     const discoveryConfig = projectConfig?.discovery || savedConfig?.discovery || {};
     const source = resolveDiscoverySource(args, discoveryConfig);
@@ -482,10 +483,16 @@ async function runJsonDiscovery(args, projectConfig, savedConfig, envToken) {
     if (source.error || !token) throw new Error(source.error || 'Discovery requires exactly one databaseId/dataSourceId and a configured Notion token.');
     const root = await realpath(path.resolve(args.out || process.cwd()));
     const results = await discoverDocuments({ notion: new NotionClient(token), ...source, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
-    console.log(JSON.stringify(results, null, 2));
+    if (jsonOutput) console.log(JSON.stringify(results, null, 2));
+    else {
+      for (const result of results) console.log(`${result.status === 'mapped' ? 'OK' : 'REVIEW'}\t${result.pageId || '(missing ID)'}\t${result.path || result.reason}\t${result.title}`);
+      console.log(`\n${results.filter((item) => item.status === 'mapped').length} mapped; ${results.filter((item) => item.status !== 'mapped').length} require review.`);
+    }
     process.exitCode = results.some((item) => item.status !== 'mapped') ? 1 : 0;
   } catch (err) {
-    console.log(JSON.stringify({ error: `Discovery failed: ${err.message}` }));
+    const message = `Discovery failed: ${err.message}`;
+    if (jsonOutput) console.log(JSON.stringify({ error: message }));
+    else p.log.error(message);
     process.exitCode = 1;
   }
 }
@@ -556,16 +563,16 @@ export async function main(envToken = null) {
     process.env.DEBUG = '1';
     if (!(args.discoverMode && args.jsonOutput)) p.log.info('Debug logging enabled (DEBUG=1)');
   }
-  // JSON discovery takes the non-interactive path before any token validation or persistence.
-  if (args.discoverMode && args.jsonOutput) {
-    let projectConfig = null;
-    let savedConfig = null;
+  // Discovery is read-only: do not validate-and-save an explicit token or enter sync flows.
+  if (args.discoverMode) {
     try {
-      projectConfig = await loadProjectConfig();
-      savedConfig = await loadConfig();
-      await runJsonDiscovery(args, projectConfig, savedConfig, envToken);
+      const projectConfig = await loadProjectConfig();
+      const savedConfig = await loadConfig();
+      await runDiscovery(args, projectConfig, savedConfig, envToken);
     } catch (err) {
-      console.log(JSON.stringify({ error: `Discovery failed: ${err.message}` }));
+      const message = `Discovery failed: ${err.message}`;
+      if (args.jsonOutput) console.log(JSON.stringify({ error: message }));
+      else p.log.error(message);
       process.exitCode = 1;
     }
     return;
