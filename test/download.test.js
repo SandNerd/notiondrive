@@ -184,7 +184,7 @@ test('downloadPages supports string-based frontmatter from properties', async ()
       createNoopHooks(),
       { format: 'markdown-tree', frontmatter: 'empty_prop' }
     );
-    const contentEmpty = await readFile(path.join(outDir, 'Empty-FM.md'), 'utf8');
+    const contentEmpty = await readFile(path.join(outDir, 'empty-fm.md'), 'utf8');
     assert.ok(!contentEmpty.includes('---'), 'Should not contain frontmatter block for empty property');
 
     // 3. Test boolean true still works
@@ -195,7 +195,7 @@ test('downloadPages supports string-based frontmatter from properties', async ()
       createNoopHooks(),
       { format: 'markdown-tree', frontmatter: true }
     );
-    const contentBool = await readFile(path.join(outDir, 'Bool-FM.md'), 'utf8');
+    const contentBool = await readFile(path.join(outDir, 'bool-fm.md'), 'utf8');
     assert.ok(contentBool.includes('---'), 'Should contain frontmatter block for boolean true');
     assert.ok(contentBool.includes('metadata:'), 'Should contain standard YAML properties');
 
