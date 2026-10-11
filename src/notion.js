@@ -268,6 +268,19 @@ export class NotionClient {
     );
   }
 
+  async queryDataSource(dataSourceId) {
+    if (typeof this.client.request !== 'function') {
+      throw new Error('The installed Notion SDK does not support data-source queries');
+    }
+    return this.paginate((opts) =>
+      this.client.request({
+        path: `data_sources/${encodeURIComponent(dataSourceId)}/query`,
+        method: 'POST',
+        body: { page_size: 100, ...opts },
+      })
+    );
+  }
+
   /**
    * Retrieve a database's metadata/properties schema.
    */

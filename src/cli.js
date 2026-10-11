@@ -9,6 +9,8 @@ import { loadConfig, loadProjectConfig, saveConfig, flattenManifest } from './co
 import { getSaveLocationOptions, isWritablePath, safeMerge } from './utils.js';
 import { downloadPages } from './download.js';
 import { executeSyncMode, startSyncWatchMode, executeStatus } from './sync.js';
+import { discoverDocuments } from './discovery.js';
+import { realpath } from 'node:fs/promises';
 
 /** Exit cleanly if the user cancels a prompt. */
 function exitIfCancelled(value) {
@@ -234,7 +236,10 @@ export function parseArgs(argv) {
     noCache: false,
     watchMode: false,
     statusMode: false,
+    discoverMode: false,
     statusFilter: null,
+    databaseId: null,
+    dataSourceId: null,
     onlyStatus: null,
     excludeDisabled: false,
     sinceDays: null,
@@ -253,7 +258,15 @@ export function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === 'sync') {
+    if (a === 'discover') {
+      out.discoverMode = true;
+    } else if (a === '--database') {
+      out.databaseId = extractNotionId(argv[i + 1]);
+      i += 1;
+    } else if (a === '--data-source') {
+      out.dataSourceId = argv[i + 1];
+      i += 1;
+    } else if (a === 'sync') {
       out.syncMode = true;
       // Capture an immediate trailing positional filter (e.g. `notiondrive sync sys-design`)
       const next = argv[i + 1];
@@ -459,6 +472,7 @@ export async function main(envToken = null) {
       'Commands:',
       '  sync                  Run batch download from notiondrive.config.json or ~/.notiondrive/config.json',
       '  status                Show sync status for manifest targets (supports name or group filtering)',
+      '  discover              Read-only database document inventory (--database <id> or --data-source <id> [--json])',
       '                        Project-local notiondrive.config.json takes precedence and can also provide token/defaultOutputDir',
       '                        You can limit which targets are processed by passing a positional filter',
       '                        after `sync` or by using the `--group` / `-g` flag.',
@@ -527,8 +541,10 @@ export async function main(envToken = null) {
 
   // If requested, read the source id/url from the system clipboard (macOS)
   // Handled later as part of headless (--source) flow to centralize clipboard access.
-  console.log(BANNER);
-  p.intro('notiondrive v0.1.2');
+  if (!args.discoverMode || !args.jsonOutput) {
+    console.log(BANNER);
+    p.intro('notiondrive v0.1.2');
+  }
 
   // ── Prepare config/token ──────────────────────────────────────────
   const projectConfig = await loadProjectConfig();
@@ -599,6 +615,34 @@ export async function main(envToken = null) {
       process.exit(0);
     } catch (err) {
       p.log.error(err.message || String(err));
+      process.exit(1);
+    }
+  }
+
+  if (args.discoverMode) {
+    const discoveryConfig = projectConfig?.discovery || savedConfig?.discovery || {};
+    const databaseId = args.databaseId || discoveryConfig.databaseId;
+    const dataSourceId = args.dataSourceId || discoveryConfig.dataSourceId;
+    token = token || savedConfig?.token || envToken || null;
+    if ((!databaseId && !dataSourceId) || (databaseId && dataSourceId) || !token) {
+      const message = 'Discovery requires exactly one databaseId/dataSourceId and a configured Notion token.';
+      if (args.jsonOutput) console.log(JSON.stringify({ error: message }));
+      else p.log.error(message);
+      process.exit(1);
+    }
+    try {
+      const notion = new NotionClient(token);
+      const root = await realpath(path.resolve(args.out || process.cwd()));
+      const results = await discoverDocuments({ notion, databaseId, dataSourceId, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
+      if (args.jsonOutput) console.log(JSON.stringify(results, null, 2));
+      else {
+        for (const result of results) console.log(`${result.status === 'mapped' ? 'OK' : 'REVIEW'}\t${result.pageId || '(missing ID)'}\t${result.path || result.reason}\t${result.title}`);
+        console.log(`\n${results.filter((item) => item.status === 'mapped').length} mapped; ${results.filter((item) => item.status !== 'mapped').length} require review.`);
+      }
+      process.exit(results.some((item) => item.status !== 'mapped') ? 1 : 0);
+    } catch (err) {
+      if (args.jsonOutput) console.log(JSON.stringify({ error: `Discovery failed: ${err.message}` }));
+      else p.log.error(`Discovery failed: ${err.message}`);
       process.exit(1);
     }
   }
