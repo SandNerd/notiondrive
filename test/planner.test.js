@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rename, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rename, rm, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createPlan } from '../src/planner.js';
+import { executeSyncMode } from '../src/sync.js';
 
 async function git(root, ...args) {
   const { spawnSync } = await import('node:child_process');
@@ -14,7 +15,7 @@ async function git(root, ...args) {
 }
 
 async function fixture(run) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'notiondrive-plan-'));
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'notiondrive-plan-')));
   try {
     await git(root, 'init', '-q');
     await git(root, 'config', 'user.email', 'test@example.com');
@@ -27,21 +28,56 @@ async function fixture(run) {
   } finally { await rm(root, { recursive: true, force: true }); }
 }
 
-test('actual sync ledger shape remains untracked and normalized Windows paths do not become false path changes', async () => {
+test('production sync ledger output remains untracked when consumed by the read-only planner', async () => {
   await fixture(async (root) => {
     const pageId = '90fabd95-e170-82e8-a49f-818c1160f390';
-    const actualSyncRecord = {
-      byNotionId: { [pageId]: { notion_id: pageId, outputs: { 'docs\\a.md': {
-        last_synced_remote_mtime: '2024-01-01T00:00:00.000Z',
-        last_synced_local_hash: cryptoHash('stable'),
-        hasSyncedBlocks: true,
-        dependencies: [],
-      } } } },
-      byPath: { 'docs\\a.md': pageId },
-    };
-    const plan = await createPlan({ root, ledgerLoader: async () => actualSyncRecord, discoveries: [{ pageId, title: 'A', path: 'docs/a.md', status: 'mapped' }], remotePages: [{ id: pageId, last_edited_time: '2024-01-01T00:00:00.000Z', properties: { Status: { type: 'select', select: { name: 'Active' } } } }] });
-    assert.equal(plan.documents[0].lastSyncedPath, 'docs/a.md');
-    assert.equal(plan.documents[0].classification, 'UNTRACKED');
+    const outputPath = path.join(root, 'docs');
+    await mkdir(outputPath, { recursive: true });
+    const sourceFile = path.join(outputPath, 'a.md');
+    await writeFile(sourceFile, 'stable');
+    const initialFile = await readFile(sourceFile);
+    const loadedLedger = { byNotionId: {}, byPath: {} };
+    const configBefore = JSON.stringify({ targets: [{ source: pageId, name: 'A', filename: 'a.md' }] });
+    let savedLedger;
+    let notionWrites = 0;
+    const prompts = { spinner: () => ({ start() {}, stop() {}, message() {} }), log: { info() {}, warn() {}, error() {}, success() {} } };
+    const originalCwd = process.cwd();
+    const originalStateFile = process.env.NOTIONDRIVE_STATE_FILE;
+    const stateFile = path.join(root, '.notiondrive-state.json');
+    process.env.NOTIONDRIVE_STATE_FILE = stateFile;
+    let sync;
+    let expectedOutputPath;
+    try {
+      process.chdir(root);
+      expectedOutputPath = path.relative(process.cwd(), sourceFile);
+      sync = await executeSyncMode({ targets: [{ source: pageId, name: 'A', filename: 'a.md', outDir: 'docs' }] }, 'test-token', {}, {
+      notion: { getPage: async () => ({ id: pageId, last_edited_time: '2024-01-01T00:00:00.000Z', properties: { Name: { type: 'title', title: [{ plain_text: 'A' }] }, Status: { type: 'select', select: { name: 'Active' } } } }), getDatabase: async () => { throw new Error('not a database'); }, appendPageContent: async () => { notionWrites += 1; }, clearPageContent: async () => { notionWrites += 1; } },
+      loadStateLedger: async () => structuredClone(loadedLedger),
+      saveStateLedger: async (ledger) => { savedLedger = structuredClone(ledger); },
+      downloadPages: async () => ({ writtenFiles: [sourceFile], foundSyncedBlocks: false, dependencies: [] }),
+      prompts,
+      });
+      assert.equal(sync.failedTargets.length, 0, JSON.stringify(sync.failedTargets));
+      const ledgerPageId = Object.keys(savedLedger?.byNotionId || {})[0];
+      assert.equal(ledgerPageId, pageId.replace(/-/g, ''));
+      const emittedOutputPath = Object.keys(savedLedger?.byNotionId?.[ledgerPageId]?.outputs || {})[0];
+      assert.equal(path.resolve(root, emittedOutputPath), sourceFile);
+      assert.deepEqual(await readFile(sourceFile), initialFile);
+      assert.equal(JSON.stringify({ targets: [{ source: pageId, name: 'A', filename: 'a.md' }] }), configBefore);
+      assert.deepEqual(loadedLedger, { byNotionId: {}, byPath: {} });
+      assert.equal(notionWrites, 0);
+      const plan = await createPlan({ root, ledgerLoader: async () => savedLedger, discoveries: [{ pageId, title: 'A', path: emittedOutputPath, status: 'mapped' }], remotePages: [{ id: pageId, last_edited_time: '2024-01-01T00:00:00.000Z', properties: { Name: { type: 'title', title: [{ plain_text: 'A' }] }, Status: { type: 'select', select: { name: 'Active' } } } }] });
+      assert.equal(plan.documents[0].lastSyncedPath, emittedOutputPath);
+      assert.equal(plan.documents[0].classification, 'UNTRACKED', plan.documents[0].reason);
+      assert.deepEqual(plan.documents[0].baseline, {
+        localHash: cryptoHash('stable'),
+        remoteRevision: '2024-01-01T00:00:00.000Z',
+      });
+    } finally {
+      process.chdir(originalCwd);
+      if (originalStateFile === undefined) delete process.env.NOTIONDRIVE_STATE_FILE;
+      else process.env.NOTIONDRIVE_STATE_FILE = originalStateFile;
+    }
   });
 });
 
