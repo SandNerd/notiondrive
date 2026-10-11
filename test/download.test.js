@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { downloadPages } from '../src/download.js';
@@ -148,6 +148,7 @@ test('downloadPages exports a flat markdown database as a single table file', as
 
 test('downloadPages supports string-based frontmatter from properties', async () => {
   const outDir = await mkdtemp(path.join(tmpdir(), 'notiondrive-fm-str-'));
+  await mkdir(outDir, { recursive: true });
   try {
     const notion = {
       throttledClient: {},
@@ -203,6 +204,7 @@ test('downloadPages supports string-based frontmatter from properties', async ()
 
 test('downloadDatabase supported string-based frontmatter for rows', async () => {
   const outDir = await mkdtemp(path.join(tmpdir(), 'notiondrive-db-fm-str-'));
+  await mkdir(outDir, { recursive: true });
   try {
     const notion = {
       throttledClient: {},

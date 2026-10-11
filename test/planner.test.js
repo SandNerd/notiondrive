@@ -108,7 +108,8 @@ function cryptoHash(value) {
 
 test('reports unknown baseline rather than inferring synchronization from timestamps', async () => {
   await fixture(async (root) => {
-    const plan = await createPlan({ root, discoveries: [{ pageId: 'page-1', title: 'A', path: 'docs/a.md', status: 'mapped', provenance: { databaseId: 'db' } }], remotePages: [{ id: 'page-1', last_edited_time: '2024-01-01' }] });
+    const pageId = 'page-1';
+    const plan = await createPlan({ root, ledgerLoader: async () => ({ byNotionId: {}, byPath: {} }), discoveries: [{ pageId, title: 'A', path: 'docs/a.md', status: 'mapped', provenance: { databaseId: 'db' } }], remotePages: [{ id: pageId, last_edited_time: '2024-01-01' }] });
     assert.equal(plan.documents[0].classification, 'UNTRACKED');
     assert.equal(plan.repository.revision.length, 40);
     assert.equal(plan.documents[0].source.id, 'db');

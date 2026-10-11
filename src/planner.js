@@ -90,7 +90,7 @@ function classify({ discovery, prior, file, remoteRevision, remote, gitEvidence 
   const lastPath = prior[0]?.path || null;
   if (prior.length && prior.some((item) => !item.path)) return ['REQUIRES_REVIEW', 'ledger contains an unsafe or ambiguous repository path'];
   if (discovery.status !== 'mapped' || !discovery.path) return ['REQUIRES_REVIEW', discovery.reason || 'discovery metadata is ambiguous or incomplete'];
-  if (lastPath && lastPath !== discovery.path) return ['PATH_CHANGED', 'Notion-derived path differs from the tracked ledger path; restructuring or a move requires review, and content equivalence is not inferred'];
+  if (lastPath && lastPath !== discovery.path && trustedBaseline(baseline)) return ['PATH_CHANGED', 'Notion-derived path differs from the tracked ledger path; restructuring or a move requires review, and content equivalence is not inferred'];
   if (gitEvidence === 'deleted') return ['POSSIBLE_ARCHIVE', 'tracked path is deleted in Git; restoration is not inferred'];
   if (gitEvidence === 'renamed') return ['POSSIBLE_MOVE', 'Git reports a rename involving the tracked path; content equivalence is not inferred'];
   if (file.error) return ['REQUIRES_REVIEW', `local file cannot be safely inspected: ${file.error}`];
