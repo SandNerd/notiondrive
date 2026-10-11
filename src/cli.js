@@ -261,9 +261,11 @@ export function parseArgs(argv) {
     if (a === 'discover') {
       out.discoverMode = true;
     } else if (a === '--database') {
+      out.databaseFlagProvided = true;
       out.databaseId = extractNotionId(argv[i + 1]);
       i += 1;
     } else if (a === '--data-source') {
+      out.dataSourceFlagProvided = true;
       out.dataSourceId = argv[i + 1];
       i += 1;
     } else if (a === 'sync') {
@@ -430,6 +432,18 @@ export function resolveSyncManifest(projectConfig, savedConfig) {
     return savedConfig;
   }
   return null;
+}
+
+export function resolveDiscoverySource(args, discoveryConfig = {}) {
+  if (args.databaseFlagProvided && args.dataSourceFlagProvided) {
+    return { error: 'Specify only one of --database or --data-source.' };
+  }
+  const databaseId = args.databaseFlagProvided ? args.databaseId : args.dataSourceFlagProvided ? null : discoveryConfig.databaseId;
+  const dataSourceId = args.dataSourceFlagProvided ? args.dataSourceId : args.databaseFlagProvided ? null : discoveryConfig.dataSourceId;
+  if ((!databaseId && !dataSourceId) || (databaseId && dataSourceId)) {
+    return { error: 'Discovery requires exactly one databaseId/dataSourceId.' };
+  }
+  return { databaseId: databaseId || null, dataSourceId: dataSourceId || null };
 }
 
 export function getHeadlessExitCode(stats) {
@@ -621,11 +635,10 @@ export async function main(envToken = null) {
 
   if (args.discoverMode) {
     const discoveryConfig = projectConfig?.discovery || savedConfig?.discovery || {};
-    const databaseId = args.databaseId || discoveryConfig.databaseId;
-    const dataSourceId = args.dataSourceId || discoveryConfig.dataSourceId;
+    const source = resolveDiscoverySource(args, discoveryConfig);
     token = token || savedConfig?.token || envToken || null;
-    if ((!databaseId && !dataSourceId) || (databaseId && dataSourceId) || !token) {
-      const message = 'Discovery requires exactly one databaseId/dataSourceId and a configured Notion token.';
+    if (source.error || !token) {
+      const message = source.error || 'Discovery requires exactly one databaseId/dataSourceId and a configured Notion token.';
       if (args.jsonOutput) console.log(JSON.stringify({ error: message }));
       else p.log.error(message);
       process.exit(1);
@@ -633,7 +646,7 @@ export async function main(envToken = null) {
     try {
       const notion = new NotionClient(token);
       const root = await realpath(path.resolve(args.out || process.cwd()));
-      const results = await discoverDocuments({ notion, databaseId, dataSourceId, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
+      const results = await discoverDocuments({ notion, ...source, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
       if (args.jsonOutput) console.log(JSON.stringify(results, null, 2));
       else {
         for (const result of results) console.log(`${result.status === 'mapped' ? 'OK' : 'REVIEW'}\t${result.pageId || '(missing ID)'}\t${result.path || result.reason}\t${result.title}`);

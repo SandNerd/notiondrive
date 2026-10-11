@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { realpath, lstat } from 'node:fs/promises';
+import { realpath, lstat, readlink } from 'node:fs/promises';
 
 function richText(value) {
   if (typeof value === 'string') return value;
@@ -12,6 +12,12 @@ function propertyValue(property) {
   if (property.type === 'title' || property.type === 'rich_text') {
     const value = richText(property[property.type]);
     return value === null ? { error: 'unsupported text property value' } : { value };
+  }
+  if (property.type === 'select') {
+    const selection = property.select;
+    if (selection === null) return { value: '' };
+    if (!selection || typeof selection !== 'object' || typeof selection.name !== 'string') return { error: 'unsupported or ambiguous select property value' };
+    return { value: selection.name };
   }
   if (property.type === 'files') return { error: 'file properties cannot identify a repository path' };
   return { error: `unsupported property type: ${property.type || 'unknown'}` };
@@ -36,10 +42,28 @@ async function checkPath(root, relativePath) {
     try {
       const info = await lstat(current);
       if (info.isSymbolicLink()) {
+        const target = await readlink(current);
+        const targetPath = path.resolve(path.dirname(current), target);
+        if (targetPath !== actualRoot && !targetPath.startsWith(`${actualRoot}${path.sep}`)) return 'destination traverses a symlink outside the repository root';
         const resolved = await realpath(current);
         if (resolved !== actualRoot && !resolved.startsWith(`${actualRoot}${path.sep}`)) return 'destination traverses a symlink outside the repository root';
       }
-    } catch (error) { if (error.code !== 'ENOENT') return `cannot validate destination: ${error.message}`; }
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        let parent = path.dirname(current);
+        while (parent !== absoluteRoot && parent.startsWith(`${absoluteRoot}${path.sep}`)) {
+          try {
+            const parentInfo = await lstat(parent);
+            if (parentInfo.isSymbolicLink()) return 'destination traverses an unresolved symlink';
+            parent = path.dirname(parent);
+          } catch (parentError) {
+            if (parentError.code !== 'ENOENT') return `cannot validate destination: ${parentError.message}`;
+            parent = path.dirname(parent);
+          }
+        }
+      }
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') return `cannot validate destination: ${error.message}`;
+    }
   }
   const resolved = path.resolve(absoluteRoot, ...normalized.split('/'));
   if (resolved !== absoluteRoot && !resolved.startsWith(`${absoluteRoot}${path.sep}`)) return 'destination escapes repository root';
@@ -92,11 +116,14 @@ export async function discoverDocuments({ notion, databaseId, dataSourceId, prop
     else {
       const filename = cleanFilename(title);
       if (!filename) reason = 'empty or invalid filename';
-      else candidate = `${directoryResult.value.replace(/\\/g, '/').replace(/\/+$/, '')}/${filename}`;
+      else {
+        const directory = directoryResult.value.replace(/\\/g, '/').replace(/\/+$/, '');
+        candidate = `${directory ? `${directory}/` : ''}${filename}`;
+      }
     }
     let source = overrideMap.has(id) ? 'explicit override' : 'derived';
     if (!reason) reason = await checkPath(root, candidate);
-    results.push({ pageId: id || null, title, path: reason ? null : candidate, source, status: reason ? 'requires_review' : 'mapped', reason, provenance: { databaseId, filenameProperty: names.filename, directoryProperty: names.directory, directory: directoryResult.value ?? null, filename: titleResult.value ?? null } });
+    results.push({ pageId: id || null, title, path: reason ? null : candidate, source, status: reason ? 'requires_review' : 'mapped', reason, provenance: { databaseId: databaseId || null, dataSourceId: dataSourceId || null, pageId: id || null, filenameProperty: names.filename, directoryProperty: names.directory, directory: directoryResult.value ?? null, filename: titleResult.value ?? null } });
   }
   for (const error of overrideErrors) results.push({ pageId: error.id || null, title: '', path: null, source: 'explicit override', status: 'requires_review', reason: error.reason, provenance: null });
   const discoveredIds = new Set(records.map((item) => item.id).filter(Boolean));

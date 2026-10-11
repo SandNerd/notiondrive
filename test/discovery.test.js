@@ -4,16 +4,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, symlink, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { discoverDocuments } from '../src/discovery.js';
+import { NotionClient } from '../src/notion.js';
 
 function page(id, name, directory) {
   return { id, properties: {
     Name: { type: 'title', title: [{ plain_text: name }] },
-    'Repository Directory': { type: 'rich_text', rich_text: [{ plain_text: directory }] },
+    'Repository Directory': { type: 'select', select: directory ? { id: 'dir-option', name: directory.replace(/\/$/, '') } : null },
   } };
 }
 
 async function fixture(run) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'notiondrive-discovery-'));
+  await mkdir(path.join(root, '.agents', 'workflows'), { recursive: true });
+  await mkdir(path.join(root, 'docs'), { recursive: true });
   try { await run(root); } finally { await rm(root, { recursive: true, force: true }); }
 }
 
@@ -54,6 +57,25 @@ test('rejects database paths with dot segments and supports data-source queries'
   });
 });
 
+test('uses supported SDK API versions and endpoints for both source modes', async () => {
+  const client = new NotionClient('fake-token');
+  const requests = [];
+  const response = { results: [], has_more: false, next_cursor: null };
+  const fetch = async (url, options) => {
+    requests.push({ url: new URL(url).pathname, version: options.headers['Notion-Version'] });
+    return { ok: true, text: async () => JSON.stringify(response) };
+  };
+  client.client = new client.client.constructor({ auth: 'fake-token', fetch, logLevel: 'error' });
+  client.dataSourceClient = new client.dataSourceClient.constructor({ auth: 'fake-token', fetch, logLevel: 'error', notionVersion: '2025-09-03' });
+  client._minInterval = 0;
+  assert.deepEqual(await client.queryDatabase('db-id'), []);
+  assert.deepEqual(await client.queryDataSource('source-id'), []);
+  assert.deepEqual(requests, [
+    { url: '/v1/databases/db-id/query', version: '2022-06-28' },
+    { url: '/v1/data_sources/source-id/query', version: '2025-09-03' },
+  ]);
+});
+
 test('queries a Notion data source using the client interface', async () => {
   let requested;
   const results = await discoverDocuments({ notion: { queryDataSource: async (id) => { requested = id; return [page('data-source-page', 'one.md', 'docs/')]; } }, dataSourceId: 'source-id', root: process.cwd() });
@@ -87,11 +109,14 @@ test('rejects symlink escapes and validates override precedence/collisions', asy
     const outside = await mkdtemp(path.join(os.tmpdir(), 'notiondrive-outside-'));
     try {
       await symlink(outside, path.join(root, 'escape'));
-      const results = await discoverDocuments({ notion: { queryDatabase: async () => [page('a', 'auto.md', 'docs/'), page('b', 'override.md', 'docs/'), page('c', 'file.md', 'escape/')] }, databaseId: 'db', root, overrides: [{ pageId: 'b', path: 'docs/auto.md' }] });
+      await symlink(path.join(outside, 'missing-target'), path.join(root, 'dangling'));
+      const results = await discoverDocuments({ notion: { queryDatabase: async () => [page('a', 'auto.md', 'docs/'), page('b', 'override.md', 'docs/'), page('c', 'file.md', 'escape/'), page('d', 'file.md', 'dangling/')] }, databaseId: 'db', root, overrides: [{ pageId: 'b', path: 'docs/auto.md' }] });
       assert.equal(results[0].status, 'requires_review');
       assert.equal(results[1].status, 'requires_review');
       assert.equal(results[1].source, 'explicit override');
       assert.match(results[2].reason, /symlink/);
+      assert.equal(results[3].status, 'requires_review');
+      assert.match(results[3].reason, /symlink/);
     } finally { await rm(outside, { recursive: true, force: true }); }
   });
 });

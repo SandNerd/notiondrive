@@ -7,6 +7,7 @@ import { extractTitle, extractDatabaseTitle } from './notion-helpers.js';
 export class NotionClient {
   constructor(token) {
     this.client = new Client({ auth: token, logLevel: LogLevel.ERROR });
+    this.dataSourceClient = new Client({ auth: token, logLevel: LogLevel.ERROR, notionVersion: '2025-09-03' });
     this._queue = Promise.resolve();
     this._minInterval = 340; // ~3 req/s with margin
     this._pending = 0; // number of requests currently queued/in-flight
@@ -269,11 +270,11 @@ export class NotionClient {
   }
 
   async queryDataSource(dataSourceId) {
-    if (typeof this.client.request !== 'function') {
+    if (typeof this.dataSourceClient.request !== 'function') {
       throw new Error('The installed Notion SDK does not support data-source queries');
     }
     return this.paginate((opts) =>
-      this.client.request({
+      this.dataSourceClient.request({
         path: `data_sources/${encodeURIComponent(dataSourceId)}/query`,
         method: 'POST',
         body: { page_size: 100, ...opts },
