@@ -6,7 +6,14 @@ import { mkdtemp, symlink, rm, readFile, writeFile, mkdir, readdir } from 'node:
 import { discoverDocuments } from '../src/discovery.js';
 import { NotionClient } from '../src/notion.js';
 
+function testPageId(id) {
+  if (!/^(?:id-\d+|missing-\d+|[a-d]|(?:missing|data-source)-page)$/i.test(id)) return id;
+  const bytes = Buffer.from(id).toString('hex').padEnd(32, '0').slice(0, 32);
+  return `${bytes.slice(0, 8)}-${bytes.slice(8, 12)}-${bytes.slice(12, 16)}-${bytes.slice(16, 20)}-${bytes.slice(20)}`;
+}
+
 function page(id, name, directory) {
+  id = testPageId(id);
   return { id, properties: {
     Name: { type: 'title', title: [{ plain_text: name }] },
     'Repository Directory': { type: 'select', select: directory ? { id: 'dir-option', name: directory.replace(/\/$/, '') } : null },
@@ -43,6 +50,35 @@ test('discovers a paginated 106-page inventory with 101 mappings and five except
   assert.equal(result[0].path, '.agents/workflows/Part-0.blueprint.md');
   assert.deepEqual(requestedCursors, [null, '20', '40', '60', '80', '100']);
   assert.deepEqual(Object.keys(result[0]).sort(), ['pageId', 'path', 'provenance', 'reason', 'source', 'status', 'title']);
+});
+
+test('canonicalizes UUID identities across pages, overrides, duplicates, and provenance', async () => {
+  await fixture(async (root) => {
+    const hyphenated = '01234567-89ab-cdef-0123-456789abcdef';
+    const compact = hyphenated.replace(/-/g, '');
+    const duplicatePages = await discoverDocuments({ notion: { queryDatabase: async () => [page(hyphenated, 'one.md', 'docs/'), page(compact.toUpperCase(), 'two.md', 'docs/')] }, databaseId: 'db', root });
+    assert.match(duplicatePages[0].reason, /duplicate Notion page/);
+    assert.match(duplicatePages[1].reason, /duplicate Notion page/);
+    const duplicateOverrides = await discoverDocuments({ notion: { queryDatabase: async () => [page(hyphenated, 'one.md', 'docs/')] }, databaseId: 'db', root, overrides: [{ pageId: compact, path: 'docs/one.md' }, { pageId: hyphenated, path: 'docs/two.md' }] });
+    assert.match(duplicateOverrides[0].reason, /duplicate override/);
+    assert.match(duplicateOverrides[1].reason, /duplicate override/);
+    const single = await discoverDocuments({ notion: { queryDatabase: async () => [page(hyphenated, 'one.md', 'docs/')] }, databaseId: 'db', root, overrides: [{ pageId: compact, path: 'docs/override.md' }] });
+    assert.equal(single[0].pageId, compact);
+    assert.equal(single[0].path, 'docs/override.md');
+    assert.equal(single[0].provenance.pageId, compact);
+    const malformed = await discoverDocuments({ notion: { queryDatabase: async () => [page('not-a-uuid', 'bad.md', 'docs/')] }, databaseId: 'db', root });
+    assert.match(malformed[0].reason, /malformed/);
+  });
+});
+
+test('rejects regular-file parent components but allows missing directories', async () => {
+  await fixture(async (root) => {
+    await writeFile(path.join(root, 'docs', 'blocker'), 'file');
+    const results = await discoverDocuments({ notion: { queryDatabase: async () => [page('0123456789abcdef0123456789abcdef', 'bad.md', 'docs/blocker/'), page('1123456789abcdef0123456789abcdef', 'new.md', 'new/nested/')] }, databaseId: 'db', root });
+    assert.equal(results[0].status, 'requires_review');
+    assert.match(results[0].reason, /non-directory parent/);
+    assert.equal(results[1].path, 'new/nested/new.md');
+  });
 });
 
 test('rejects database paths with dot segments and supports data-source queries', async () => {
@@ -110,7 +146,7 @@ test('rejects symlink escapes and validates override precedence/collisions', asy
     try {
       await symlink(outside, path.join(root, 'escape'));
       await symlink(path.join(outside, 'missing-target'), path.join(root, 'dangling'));
-      const results = await discoverDocuments({ notion: { queryDatabase: async () => [page('a', 'auto.md', 'docs/'), page('b', 'override.md', 'docs/'), page('c', 'file.md', 'escape/'), page('d', 'file.md', 'dangling/')] }, databaseId: 'db', root, overrides: [{ pageId: 'b', path: 'docs/auto.md' }] });
+      const results = await discoverDocuments({ notion: { queryDatabase: async () => [page('a', 'auto.md', 'docs/'), page('b', 'override.md', 'docs/'), page('c', 'file.md', 'escape/'), page('d', 'file.md', 'dangling/')] }, databaseId: 'db', root, overrides: [{ pageId: testPageId('b'), path: 'docs/auto.md' }] });
       assert.equal(results[0].status, 'requires_review');
       assert.equal(results[1].status, 'requires_review');
       assert.equal(results[1].source, 'explicit override');
@@ -125,7 +161,7 @@ test('rejects duplicate overrides and ambiguous property types', async () => {
   await fixture(async (root) => {
     const row = page('a', 'file.md', 'docs/');
     row.properties.Name = { type: 'number', number: 3 };
-    const results = await discoverDocuments({ notion: { queryDatabase: async () => [row] }, databaseId: 'db', root, overrides: [{ pageId: 'a', path: 'docs/one.md' }, { pageId: 'a', path: 'docs/two.md' }] });
+    const results = await discoverDocuments({ notion: { queryDatabase: async () => [row] }, databaseId: 'db', root, overrides: [{ pageId: testPageId('a'), path: 'docs/one.md' }, { pageId: testPageId('a'), path: 'docs/two.md' }] });
     assert.equal(results[0].path, null);
     assert.match(results[0].reason, /duplicate override/);
     assert.equal(results[1].status, 'requires_review');

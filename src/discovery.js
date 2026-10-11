@@ -29,23 +29,35 @@ function cleanFilename(value) {
   return normalized;
 }
 
+function canonicalizeNotionPageId(value) {
+  if (typeof value !== 'string' || !/^(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.test(value)) return null;
+  return value.replace(/-/g, '').toLowerCase();
+}
+
 async function checkPath(root, relativePath) {
   if (typeof relativePath !== 'string' || !relativePath.trim() || path.isAbsolute(relativePath) || relativePath.includes('\\') || relativePath.includes('\0')) return 'destination is not a valid relative path';
   const normalized = path.posix.normalize(relativePath);
   if (normalized === '.' || normalized === '..' || normalized.startsWith('../') || normalized !== relativePath || relativePath.split('/').some((part) => !part || part === '.' || part === '..')) return 'destination contains traversal or ambiguous path components';
   const absoluteRoot = path.resolve(root);
+  const components = normalized.split('/');
   let actualRoot;
   try { actualRoot = await realpath(absoluteRoot); } catch { return 'repository root does not exist'; }
   let current = absoluteRoot;
-  for (const segment of normalized.split('/')) {
+  for (const [index, segment] of components.entries()) {
     current = path.join(current, segment);
     try {
       const info = await lstat(current);
+      if (index < components.length - 1 && !info.isSymbolicLink() && !info.isDirectory()) return 'destination has a non-directory parent component';
       if (info.isSymbolicLink()) {
         const target = await readlink(current);
         const targetPath = path.resolve(path.dirname(current), target);
         if (targetPath !== actualRoot && !targetPath.startsWith(`${actualRoot}${path.sep}`)) return 'destination traverses a symlink outside the repository root';
-        const resolved = await realpath(current);
+        let resolved;
+        try { resolved = await realpath(current); } catch (resolveError) {
+          if (resolveError.code === 'ENOENT') return 'destination traverses an unresolved symlink';
+          if (resolveError.code === 'ENOTDIR') return 'destination has a non-directory parent component';
+          throw resolveError;
+        }
         if (resolved !== actualRoot && !resolved.startsWith(`${actualRoot}${path.sep}`)) return 'destination traverses a symlink outside the repository root';
       }
     } catch (error) {
@@ -62,7 +74,8 @@ async function checkPath(root, relativePath) {
           }
         }
       }
-      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') return `cannot validate destination: ${error.message}`;
+      if (error.code === 'ENOTDIR') return 'destination has a non-directory parent component';
+      if (error.code !== 'ENOENT') return `cannot validate destination: ${error.message}`;
     }
   }
   const resolved = path.resolve(absoluteRoot, ...normalized.split('/'));
@@ -78,17 +91,21 @@ export async function discoverDocuments({ notion, databaseId, dataSourceId, prop
   const names = { filename: properties.filename || 'Name', directory: properties.directory || 'Repository Directory' };
   const pages = await query.call(notion, dataSourceId || databaseId);
   if (!Array.isArray(pages)) throw new Error('Notion query returned an invalid results collection');
-  const records = pages.map((page) => ({ page, id: typeof page?.id === 'string' ? page.id.toLowerCase() : '', title: '' }));
+  const records = pages.map((page) => ({ page, rawId: page?.id, id: canonicalizeNotionPageId(page?.id), title: '' }));
   const counts = new Map();
   for (const item of records) if (item.id) counts.set(item.id, (counts.get(item.id) || 0) + 1);
   const overrideMap = new Map();
   const overrideErrors = [];
   const duplicateOverrideIds = new Set();
   for (const override of overrides) {
-    const id = typeof override?.pageId === 'string' ? override.pageId.toLowerCase() : '';
+    const id = canonicalizeNotionPageId(override?.pageId);
     if (!id || overrideMap.has(id)) {
-      if (id) duplicateOverrideIds.add(id);
-      overrideErrors.push({ id, reason: 'missing or duplicate override page ID' });
+      if (id) {
+        duplicateOverrideIds.add(id);
+        const existing = overrideErrors.find((item) => item.id === id);
+        if (existing) existing.reason = 'duplicate override page ID';
+        else overrideErrors.push({ id, reason: 'duplicate override page ID' });
+      } else overrideErrors.push({ id, reason: 'missing or malformed override page ID' });
       continue;
     }
     overrideMap.set(id, override.path);
@@ -102,7 +119,7 @@ export async function discoverDocuments({ notion, databaseId, dataSourceId, prop
     const title = titleResult.value ?? '';
     let candidate = null;
     let reason = null;
-    if (!id) reason = 'missing or invalid Notion page ID';
+    if (!id) reason = 'missing or malformed Notion page ID';
     else if (duplicateOverrideIds.has(id)) reason = 'duplicate override page ID';
     else if (counts.get(id) > 1) reason = 'duplicate Notion page identity';
     else if (overrideMap.has(id)) {

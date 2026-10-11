@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseArgs, extractNotionId, getHeadlessExitCode, resolveDiscoverySource } from '../src/cli.js';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 
 test('parseArgs recognizes flags and type', () => {
   const args = parseArgs(['--format', 'flattened', '--out', '/tmp', '--type', 'csv', '--debug']);
@@ -34,6 +36,17 @@ test('parseArgs preserves token short flag', () => {
 test('extractNotionId extracts 32 char id or hyphenated', () => {
   const id = extractNotionId('https://notion.so/Page-Title-0123456789abcdef0123456789abcdef');
   assert.equal(id.length, 32);
+});
+
+test('discover --json emits exactly one JSON value for missing credentials and explicit tokens', () => {
+  const cli = path.resolve('bin/cli.js');
+  for (const args of [['discover', '--json'], ['discover', '--json', '--token', 'fake-token']]) {
+    const result = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', env: { ...process.env, NOTION_TOKEN: '' } });
+    assert.notEqual(result.status, 0);
+    assert.doesNotThrow(() => JSON.parse(result.stdout));
+    assert.equal(result.stdout.trim().startsWith('{') || result.stdout.trim().startsWith('['), true);
+    assert.equal(result.stderr.includes('Validating token'), false);
+  }
 });
 
 test('getHeadlessExitCode fails when stats contain errors', () => {

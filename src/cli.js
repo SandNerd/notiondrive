@@ -474,6 +474,22 @@ export function loadLocalManifest() {
   }
 }
 
+async function runJsonDiscovery(args, projectConfig, savedConfig, envToken) {
+  try {
+    const discoveryConfig = projectConfig?.discovery || savedConfig?.discovery || {};
+    const source = resolveDiscoverySource(args, discoveryConfig);
+    const token = args.token || envToken || projectConfig?.token || savedConfig?.token || null;
+    if (source.error || !token) throw new Error(source.error || 'Discovery requires exactly one databaseId/dataSourceId and a configured Notion token.');
+    const root = await realpath(path.resolve(args.out || process.cwd()));
+    const results = await discoverDocuments({ notion: new NotionClient(token), ...source, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
+    console.log(JSON.stringify(results, null, 2));
+    process.exitCode = results.some((item) => item.status !== 'mapped') ? 1 : 0;
+  } catch (err) {
+    console.log(JSON.stringify({ error: `Discovery failed: ${err.message}` }));
+    process.exitCode = 1;
+  }
+}
+
 export async function main(envToken = null) {
   const args = parseArgs(process.argv.slice(2));
   try {
@@ -538,8 +554,23 @@ export async function main(envToken = null) {
   // Enable debug mode early so other modules can check env var
   if (args.debug) {
     process.env.DEBUG = '1';
-    p.log.info('Debug logging enabled (DEBUG=1)');
+    if (!(args.discoverMode && args.jsonOutput)) p.log.info('Debug logging enabled (DEBUG=1)');
   }
+  // JSON discovery takes the non-interactive path before any token validation or persistence.
+  if (args.discoverMode && args.jsonOutput) {
+    let projectConfig = null;
+    let savedConfig = null;
+    try {
+      projectConfig = await loadProjectConfig();
+      savedConfig = await loadConfig();
+      await runJsonDiscovery(args, projectConfig, savedConfig, envToken);
+    } catch (err) {
+      console.log(JSON.stringify({ error: `Discovery failed: ${err.message}` }));
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   // If the user asked to read the source id/url from stdin (pipe/echo), do that now.
   if (args.source === '-') {
     // Read all stdin
@@ -586,6 +617,8 @@ export async function main(envToken = null) {
       process.exit(1);
     }
   }
+
+  // JSON discovery is handled before token validation or persistence.
 
   // If user supplied a new token via CLI flag, prefer and save it (after validation)
   let tokenSavedViaFlag = false;
