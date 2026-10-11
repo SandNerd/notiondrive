@@ -78,196 +78,119 @@ async function getManifestEntriesForPath(absoluteLocalPath) {
   return results;
 }
 
+async function preflightRemoteWrite(notion, pageId, onBlocked) {
+  const blocks = await notion.getBlockChildren(pageId);
+  if (!Array.isArray(blocks)) {
+    throw new Error('Could not verify the Notion canvas before writing');
+  }
+
+  const hasRichStructures = blocks.some(
+    (block) => block && (block.type === 'child_database' || block.type === 'synced_block')
+  );
+  if (!hasRichStructures) return blocks;
+
+  if (process.argv.includes('--force') || process.argv.includes('-f')) {
+    console.log('[SAFETY] Remote rich structures detected, but --force flag is active. Proceeding with push.');
+    return blocks;
+  }
+
+  onBlocked?.();
+  return false;
+}
+
+async function updateNotionTitle(notion, pageId, title) {
+  const page = await notion.getPage(pageId);
+  const titleKey = Object.entries(page?.properties || {}).find(([, prop]) => prop?.type === 'title')?.[0] || 'title';
+  await notion.client.pages.update({
+    page_id: pageId,
+    properties: {
+      [titleKey]: {
+        title: [{ type: 'text', text: { content: title } }],
+      },
+    },
+  });
+}
+
+async function prepareUploadContent({ notion, pageId, target, localContent, localOutputPath }) {
+  let uploadContent = stripLeadingFrontmatter(
+    await applyFrontmatterTarget(notion, pageId, target, localContent)
+  );
+
+  if (target?.title === 'filename' || target?.title === 'relativePath') {
+    const desiredTitle = target.title === 'relativePath'
+      ? (target.relativePath || target.filename || path.basename(localOutputPath))
+      : (target.filename || path.basename(localOutputPath));
+    const oldCloudTitle = extractTitle(await notion.getPage(pageId));
+    const parsedFrontmatter = target.frontmatter && typeof target.frontmatter === 'string'
+      ? extractLeadingFrontmatter(localContent)
+      : null;
+    const extracted = parsedFrontmatter?.raw
+      ? extractFrontmatterKeyValue(parsedFrontmatter.raw, target.frontmatter)
+      : null;
+    const skipDemotion = extracted != null && String(oldCloudTitle) === String(extracted);
+    const demotionHeader = `# ${oldCloudTitle}`;
+    const hasDemotionHeader = uploadContent.split('\n').some((line) => line.trim() === demotionHeader);
+
+    if (oldCloudTitle && oldCloudTitle !== desiredTitle && !hasDemotionHeader && !skipDemotion) {
+      uploadContent = `${demotionHeader}\n\n${uploadContent}`;
+    }
+    if (oldCloudTitle !== desiredTitle) {
+      await updateNotionTitle(notion, pageId, desiredTitle);
+    }
+    return uploadContent;
+  }
+
+  const bodyLines = uploadContent.split('\n');
+  const firstContentLine = bodyLines.findIndex((line) => line.trim());
+  if (firstContentLine < 0 || !bodyLines[firstContentLine].trim().startsWith('# ')) {
+    return uploadContent;
+  }
+
+  const extractedTitle = bodyLines[firstContentLine].trim().slice(2).trim();
+  const page = await notion.getPage(pageId);
+  if (extractTitle(page) !== extractedTitle) {
+    await updateNotionTitle(notion, pageId, extractedTitle);
+  }
+  return bodyLines.filter((_, index) => index !== firstContentLine).join('\n');
+}
+
+async function saveLedgerBaseline(ledger, pageId, relKey, record, saveStateLedgerFn) {
+  const updatedLedger = JSON.parse(JSON.stringify(ledger || { byNotionId: {}, byPath: {} }));
+  updatedLedger.byNotionId = updatedLedger.byNotionId || {};
+  updatedLedger.byPath = updatedLedger.byPath || {};
+  updatedLedger.byNotionId[pageId] = updatedLedger.byNotionId[pageId] || { notion_id: pageId, outputs: {} };
+  const outputs = updatedLedger.byNotionId[pageId].outputs || {};
+  updatedLedger.byNotionId[pageId].outputs = outputs;
+  outputs[relKey] = { ...(outputs[relKey] || {}), ...record };
+  updatedLedger.byPath[relKey] = pageId;
+
+  await saveStateLedgerFn(updatedLedger);
+  for (const key of Object.keys(ledger)) delete ledger[key];
+  Object.assign(ledger, updatedLedger);
+}
+
 async function pushLocalFileToNotion({ notion, pageId, targetItem, target, localOutputPath, currentLocalHash, ledger, saveStateLedgerFn }) {
   const localContent = await fs.readFile(localOutputPath, 'utf-8');
-  // Safety: detect flattened markdown tables or embedded sub-page markers that
-  // would indicate pushing this raw markdown could overwrite active database
-  // structures in Notion. If detected, abort the push to protect live data.
-  // Structural preflight: check the live Notion canvas for rich structures
-  // (child_database or synced_block) that would be flattened by a raw push.
-  let remoteHasRichStructures = false;
-  try {
-    const remoteBlocks = await notion.getBlockChildren(pageId);
-    remoteHasRichStructures = Array.isArray(remoteBlocks) && remoteBlocks.some(
-      (block) => block && (block.type === 'child_database' || block.type === 'synced_block')
-    );
-  } catch (err) {
-    // Fall back to safe false if block read permissions fail
-  }
+  const remoteBlocks = await preflightRemoteWrite(notion, pageId, () => {
+    console.warn(`[SAFETY BYPASS] Aborting push for target page ID "${pageId}". The Notion canvas contains a live child_database or synced_block element that would be flattened into static text. Run the command with the '--force' flag to confirm this overwrite.`);
+  });
+  if (!remoteBlocks) return null;
 
-  if (remoteHasRichStructures) {
-    const hasForceFlag = process.argv.includes('--force') || process.argv.includes('-f');
-    if (!hasForceFlag) {
-      console.warn(`[SAFETY BYPASS] Aborting push for target page ID "${pageId}". The Notion canvas contains a live child_database or synced_block element that would be flattened into static text. Run the command with the '--force' flag to confirm this overwrite.`);
-      return null;
-    }
-    console.log(`[SAFETY] Remote rich structures detected, but --force flag is active. Proceeding with push.`);
-  }
-  const uploadContentRaw = await applyFrontmatterTarget(notion, pageId, target, localContent);
-
-  // Frontmatter should never be included in page body uploads.
-  // applyFrontmatterTarget already strips YAML from the markdown.
-  let normalizedUploadContentRaw = uploadContentRaw;
-  normalizedUploadContentRaw = stripLeadingFrontmatter(normalizedUploadContentRaw);
-
-  const uploadHasExplicitTitleOverride = target?.title === 'filename' || target?.title === 'relativePath';
-
-  // Optionally force the Notion page title to match the local filename derived title.
-  // When enabled we must bypass the legacy "extract and strip first H1" logic.
-  let uploadContent = normalizedUploadContentRaw;
-  if (uploadHasExplicitTitleOverride) {
-    const desiredTitle = target?.title === 'relativePath'
-      ? (target.relativePath || target.filename || path.basename(localOutputPath))
-      : (target?.filename || path.basename(localOutputPath));
-    const oldCloudTitle = extractTitle(await notion.getPage(pageId));
-
-    // If the previous cloud title equals the value extracted from the
-    // configured frontmatter key (e.g., YAML `description:` injected into
-    // Notion property `Description`), avoid demoting that title into the
-    // page body. This prevents frontmatter-like content from reappearing
-    // as a large heading when `title: "filename"` is enabled.
-    let skipDemotion = false;
-    if (target?.frontmatter && typeof target.frontmatter === 'string') {
-      const parsedFrontmatter = extractLeadingFrontmatter(localContent);
-      if (parsedFrontmatter?.raw) {
-        const extracted = extractFrontmatterKeyValue(parsedFrontmatter.raw, target.frontmatter);
-        skipDemotion = extracted != null && String(oldCloudTitle) === String(extracted);
-      }
-    }
-
-    let scanContent = uploadContent;
-    let fmMatch = null;
-    if (scanContent.startsWith('---')) {
-      fmMatch = scanContent.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-      if (fmMatch) {
-        scanContent = scanContent.slice(fmMatch[0].length);
-      }
-    }
-
-    const bodyText = scanContent;
-    const demotionHeader = `# ${oldCloudTitle}`;
-    const bodyContainsExactHeader = bodyText.split('\n').some((line) => line.trim() === demotionHeader);
-
-    if (oldCloudTitle && oldCloudTitle !== desiredTitle && !bodyContainsExactHeader && !skipDemotion) {
-      const insertion = `${demotionHeader}\n\n`;
-      uploadContent = insertion + scanContent;
-
-      try {
-        await notion.client.pages.update({
-          page_id: pageId,
-          properties: Object.entries((await notion.getPage(pageId))?.properties || {})
-            .filter(([, prop]) => prop && prop.type === 'title')
-            .reduce((acc, [titleKey]) => {
-              acc[titleKey] = {
-                title: [{ type: 'text', text: { content: desiredTitle } }],
-              };
-              return acc;
-            }, {}),
-        });
-      } catch {
-        // Fall back to normal push content behavior if title update fails.
-      }
-    } else if (oldCloudTitle !== desiredTitle) {
-      // Still need to align title, even if demotion header already exists.
-      try {
-        const page = await notion.getPage(pageId);
-        let titleKey = 'title';
-        for (const [key, prop] of Object.entries(page.properties || {})) {
-          if (prop.type === 'title') {
-            titleKey = key;
-            break;
-          }
-        }
-
-        await notion.client.pages.update({
-          page_id: pageId,
-          properties: {
-            [titleKey]: {
-              title: [{ type: 'text', text: { content: desiredTitle } }],
-            },
-          },
-        });
-      } catch {
-        // ignore
-      }
-    }
-  } else {
-    // Extract leading H1 to use as title and avoid body duplication
-    let scanContent = uploadContentRaw;
-    let fmMatch = null;
-    if (uploadContentRaw.startsWith('---')) {
-      fmMatch = uploadContentRaw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-      if (fmMatch) {
-        scanContent = uploadContentRaw.slice(fmMatch[0].length);
-      }
-    }
-
-    const bodyLines = scanContent.split('\n');
-    let h1Index = -1;
-    let extractedTitle = null;
-    for (let i = 0; i < bodyLines.length; i++) {
-      const trimmed = bodyLines[i].trim();
-      if (!trimmed) continue;
-      if (trimmed.startsWith('# ')) {
-        h1Index = i;
-        extractedTitle = trimmed.slice(2).trim();
-      }
-      break;
-    }
-
-    if (extractedTitle) {
-      try {
-        const page = await notion.getPage(pageId);
-        let titleKey = 'title';
-        for (const [key, prop] of Object.entries(page.properties || {})) {
-          if (prop.type === 'title') {
-            titleKey = key;
-            break;
-          }
-        }
-
-        const currentTitle = extractTitle(page);
-        if (currentTitle !== extractedTitle) {
-          await notion.client.pages.update({
-            page_id: pageId,
-            properties: {
-              [titleKey]: {
-                title: [{ type: 'text', text: { content: extractedTitle } }],
-              },
-            },
-          });
-        }
-
-        // Remove H1 from body to prevent duplication
-        const newBody = bodyLines.filter((_, idx) => idx !== h1Index).join('\n');
-        uploadContent = newBody;
-      } catch (err) {
-        if (process.env.DEBUG) console.error(`[DEBUG] Failed to sync H1 title: ${err.message}`);
-      }
-    }
-  }
-
+  const uploadContent = await prepareUploadContent({ notion, pageId, target, localContent, localOutputPath });
   const blocks = markdownToNotionBlocks(uploadContent, localOutputPath);
-
   await notion.clearPageContent(pageId);
   const appended = await notion.appendPageContent(pageId, blocks);
   const refreshedPage = await notion.getPage(pageId);
   const newRemoteMtime = refreshedPage?.last_edited_time || targetItem.remoteMtime || null;
   const relKey = path.relative(process.cwd(), localOutputPath);
+  const priorRecord = ledger.byNotionId?.[pageId]?.outputs?.[relKey] || {};
 
-  ledger.byNotionId = ledger.byNotionId || {};
-  ledger.byPath = ledger.byPath || {};
-  ledger.byNotionId[pageId] = ledger.byNotionId[pageId] || { notion_id: pageId, outputs: {} };
-  const priorRecord = ledger.byNotionId[pageId].outputs[relKey] || {};
-  ledger.byNotionId[pageId].outputs[relKey] = {
+  await saveLedgerBaseline(ledger, pageId, relKey, {
     last_synced_remote_mtime: newRemoteMtime,
     last_synced_local_hash: currentLocalHash,
     hasSyncedBlocks: priorRecord.hasSyncedBlocks || false,
     dependencies: Array.isArray(priorRecord.dependencies) ? priorRecord.dependencies : [],
-  };
-  ledger.byPath[relKey] = pageId;
-  await saveStateLedgerFn(ledger);
-
+  }, saveStateLedgerFn);
   return appended;
 }
 
@@ -745,7 +668,11 @@ export async function executeSyncMode(manifest, token, args, overrides = {}) {
       let page;
       try {
         page = await notion.getPage(pageId);
+      } catch {
+        page = null;
+      }
 
+      if (page) {
         let name = extractTitle(page) || 'Exported-Page';
 
         if (target?.title === 'filename' || target?.title === 'relativePath') {
@@ -783,53 +710,38 @@ export async function executeSyncMode(manifest, token, args, overrides = {}) {
           const currentCloudTitle = name;
 
           if (currentCloudTitle !== desiredTitle) {
-            try {
-              const children = await notion.getBlockChildren(pageId);
-              const first = Array.isArray(children) ? children[0] : null;
-
-              const getHeading1PlainText = (block) => {
-                if (!block || block.type !== 'heading_1') return '';
-                if (!block.heading_1?.rich_text) return '';
-                return block.heading_1.rich_text.map((t) => t?.plain_text || t?.text?.content || '').join('');
-              };
-
-              const needsDemotion = !first || first.type !== 'heading_1' || getHeading1PlainText(first) !== currentCloudTitle;
-              if (needsDemotion) {
-                const demotionBlocks = markdownToNotionBlocks(`# ${currentCloudTitle}`, `notiondrive-${pageId}.md`);
-                const demotionBlock = demotionBlocks[0] || null;
-                const updatedBlocks = demotionBlock ? [demotionBlock, ...(children || [])] : (children || []);
-
-                await notion.clearPageContent(pageId);
-                await notion.appendPageContent(pageId, updatedBlocks);
-              }
-
-              let titleKey = 'title';
-              for (const [key, prop] of Object.entries(page.properties || {})) {
-                if (prop?.type === 'title') {
-                  titleKey = key;
-                  break;
-                }
-              }
-
-              await notion.client.pages.update({
-                page_id: pageId,
-                properties: {
-                  [titleKey]: {
-                    title: [{ type: 'text', text: { content: desiredTitle } }],
-                  },
-                },
+            name = desiredTitle;
+            if (target.sync === 'push-only' || target.sync === 'two-way') {
+              const children = await preflightRemoteWrite(notion, pageId, () => {
+                prompts.log.warn(`[SAFETY] Aborting title alignment for ${identifier}; remote Notion canvas contains child_database or synced_block.`);
               });
+              if (!children) {
+                completedTargets.push({
+                  target,
+                  item: { id: pageId, name, type: 'page', customFilename: target.filename, remoteMtime: page.last_edited_time || null },
+                  skipped: true,
+                  reason: 'safety-bypass',
+                });
+                continue;
+              }
+              const first = children[0] || null;
+              const firstTitle = first?.type === 'heading_1'
+                ? (first.heading_1?.rich_text || []).map((text) => text?.plain_text || text?.text?.content || '').join('')
+                : '';
+              if (!first || firstTitle !== currentCloudTitle) {
+                const demotionBlock = markdownToNotionBlocks(`# ${currentCloudTitle}`, `notiondrive-${pageId}.md`)[0];
+                await notion.clearPageContent(pageId);
+                await notion.appendPageContent(pageId, [demotionBlock, ...children]);
+              }
 
-              name = desiredTitle;
-            } catch (err) {
-              _debugLog(err);
+              await updateNotionTitle(notion, pageId, desiredTitle);
             }
           }
         }
 
         const remoteMtime = (target.sync === 'push-only') ? null : page?.last_edited_time || null;
         targetItem = { id: pageId, name, type: 'page', customFilename: target.filename, remoteMtime };
-      } catch {
+      } else {
         const db = await notion.getDatabase(pageId);
         const name = extractDatabaseTitle(db) || 'Exported-Database';
         const remoteMtime = (target.sync === 'push-only') ? null : db?.last_edited_time || null;
@@ -1058,6 +970,7 @@ export async function executeSyncMode(manifest, token, args, overrides = {}) {
                     if (appended === null) {
                       prompts.log.warn(`[SAFETY] Push aborted for ${identifier}. Skipping target.`);
                       completedTargets.push({ target, item: targetItem, skipped: true, reason: 'safety-bypass' });
+                      continue;
                     } else {
                       prompts.log.info(`[Uploaded] Successfully synced ${appended} block(s) to Notion for bidirectional target "${identifier}"`);
                       pushedTwoWay = true;
@@ -1088,6 +1001,7 @@ export async function executeSyncMode(manifest, token, args, overrides = {}) {
                 if (appended === null) {
                   prompts.log.warn(`[SAFETY] Push aborted for ${identifier}. Skipping target.`);
                   completedTargets.push({ target, item: targetItem, skipped: true, reason: 'safety-bypass' });
+                  continue;
                 } else {
                   prompts.log.info(`[Pushed] Successfully resolved conflict by overwriting Notion for ${identifier}`);
                   pushedTwoWay = true;
@@ -1133,6 +1047,12 @@ export async function executeSyncMode(manifest, token, args, overrides = {}) {
         },
         downloadOpts
       );
+
+      if (Array.isArray(stats?.errors) && stats.errors.length > 0) {
+        const details = stats.errors.map((entry) => entry?.error || String(entry)).join('; ');
+        failedTargets.push({ target, error: `Partial download failed: ${details}` });
+        continue;
+      }
 
       // After successful download, find the main output file and update ledger
       const match = (stats && Array.isArray(stats.writtenFiles)) ? stats.writtenFiles.find((f) => {
@@ -1669,53 +1589,29 @@ async function pushSingleFileToNotionWatched({ notion, pageId, filePath, ledger,
   try {
     const localContent = await fs.readFile(filePath, 'utf-8');
     const currentHash = await calculateFileHash(filePath);
-    
-    // Structural preflight: check the live Notion canvas for rich structures
-    // (child_database or synced_block) that would be flattened by a raw push.
-    try {
-      let remoteHasRichStructures = false;
-      try {
-        const remoteBlocks = await notion.getBlockChildren(pageId);
-        remoteHasRichStructures = Array.isArray(remoteBlocks) && remoteBlocks.some(
-          (block) => block && (block.type === 'child_database' || block.type === 'synced_block')
-        );
-      } catch (err) {
-        // Fall back to safe false if block read permissions fail
-      }
 
-      if (remoteHasRichStructures) {
-        const hasForceFlag = process.argv.includes('--force') || process.argv.includes('-f');
-        if (!hasForceFlag) {
-          prompts.log.warn(`[SAFETY] Aborting push for ${path.basename(filePath)}. Remote Notion canvas contains child_database or synced_block; run with --force to override.`);
-          return false;
-        }
-        prompts.log.info(`[SAFETY] Remote rich structures detected, but --force flag present. Proceeding with push for ${path.basename(filePath)}.`);
-      }
-    } catch {
-      // Non-fatal
-    }
-    const uploadContent = await applyFrontmatterTarget(notion, pageId, target, localContent);
+    const remoteBlocks = await preflightRemoteWrite(notion, pageId, () => {
+      prompts.log.warn(`[SAFETY] Aborting push for ${path.basename(filePath)}. Remote Notion canvas contains child_database or synced_block; run with --force to override.`);
+    });
+    if (!remoteBlocks) return false;
+
+    const uploadContent = await prepareUploadContent({
+      notion, pageId, target, localContent, localOutputPath: filePath,
+    });
     const blocks = markdownToNotionBlocks(uploadContent, filePath);
     await notion.clearPageContent(pageId);
-    const appended = await notion.appendPageContent(pageId, blocks);
+    await notion.appendPageContent(pageId, blocks);
     const refreshedPage = await notion.getPage(pageId);
     const newRemoteMtime = refreshedPage?.last_edited_time || null;
     const relKey = path.relative(process.cwd(), filePath);
-    
-    // Update ledger
-    ledger.byNotionId = ledger.byNotionId || {};
-    ledger.byPath = ledger.byPath || {};
-    ledger.byNotionId[pageId] = ledger.byNotionId[pageId] || { notion_id: pageId, outputs: {} };
-    ledger.byNotionId[pageId].outputs[relKey] = {
+
+    await saveLedgerBaseline(ledger, pageId, relKey, {
       last_synced_remote_mtime: newRemoteMtime,
       last_synced_local_hash: currentHash,
-    };
-    ledger.byPath[relKey] = pageId;
-    await saveStateLedgerFn(ledger);
-    
+    }, saveStateLedgerFn);
     return true;
   } catch (err) {
-    p.log.error(`[Watcher] Push failed for ${path.basename(filePath)}: ${err.message}`);
+    prompts.log.error(`[Watcher] Push failed for ${path.basename(filePath)}: ${err.message}`);
     return false;
   }
 }
@@ -1730,12 +1626,17 @@ export async function startSyncWatchMode(manifest, token, args, overrides = {}) 
   // Run baseline sync first to align local and remote
   prompts.log.info('[Watcher] Running baseline sync...');
   const result = await executeSyncMode(manifest, token, args, overrides);
+  if (result.failedTargets?.length) {
+    prompts.log.warn('[Watcher] Baseline sync had failures; watch mode will not start.');
+    return result;
+  }
   prompts.log.success('[Watcher] Baseline sync complete.');
   
   const NotionClass = overrides.notionClass || NotionClient;
   const loadStateLedgerFn = overrides.loadStateLedger || loadStateLedger;
   const saveStateLedgerFn = overrides.saveStateLedger || saveStateLedger;
   const notion = overrides.notion || new NotionClass(token);
+  const watchFn = overrides.watch || watch;
   
   // Load ledger to build file-to-target map
   let ledger;
@@ -1767,7 +1668,7 @@ export async function startSyncWatchMode(manifest, token, args, overrides = {}) 
   // Setup file watchers on each directory
   for (const dir of dirsToWatch) {
     try {
-      const watcher = watch(dir, async (eventType, filename) => {
+      const watcher = watchFn(dir, async (eventType, filename) => {
         if (!filename) return;
         
         const changedPath = path.resolve(dir, filename);
@@ -1840,11 +1741,7 @@ export async function startSyncWatchMode(manifest, token, args, overrides = {}) 
     
     // Flush ledger to disk one last time
     try {
-      try {
-        ledger = await loadStateLedgerFn();
-      } catch {
-        ledger = { byNotionId: {}, byPath: {} };
-      }
+      ledger = await loadStateLedgerFn();
       await saveStateLedgerFn(ledger);
       prompts.log.success('[Watcher] Ledger saved. Exiting.');
     } catch (err) {
