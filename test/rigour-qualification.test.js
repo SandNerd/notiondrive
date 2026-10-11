@@ -27,11 +27,12 @@ test('aggregated findings with new candidate paths are rejected', () => {
   assert.equal(compareReports(base, unchanged).length, 1);
 });
 
-test('aggregate comparison rejects candidate-only implicated paths', () => {
+test('aggregate comparison rejects candidate-only or worsened implicated paths', () => {
   const baseline = report([finding({ id: 'file-size', files: ['src/cli.js (300 lines)'] })]);
-  const candidate = report([finding({ id: 'file-size', files: ['src/cli.js (300 lines)', 'scripts/rigour-qualification.js (300 lines)'] })]);
-  const introduced = compareReports(baseline, candidate);
-  assert.deepEqual(introduced[0].files, ['scripts/rigour-qualification.js']);
+  const introduced = compareReports(baseline, report([finding({ id: 'file-size', files: ['src/cli.js (300 lines)', 'scripts/new.js (300 lines)'] })]));
+  assert.deepEqual(introduced[0].files, ['scripts/new.js']);
+  const worsened = compareReports(baseline, report([finding({ id: 'file-size', files: ['src/cli.js (300 lines)', 'scripts/rigour-qualification.js (403 lines)'] })]), new Set(['scripts/rigour-qualification.js']));
+  assert.deepEqual(worsened[0].files, ['scripts/rigour-qualification.js']);
 });
 
 test('error-handling aggregate count shifts qualify but strategy changes remain findings', () => {

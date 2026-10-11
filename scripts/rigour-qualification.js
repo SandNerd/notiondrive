@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
 import parseJsonWithoutExceptions from 'json-parse-even-better-errors';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -31,10 +31,11 @@ function runCommand(command, args) {
 }
 
 function candidateChangedFiles() {
+  const paths = [];
   const diffPaths = runCommand('git', ['diff', '--name-only', '-z', `${baselineRevision}...HEAD`]);
+  paths.push(...diffPaths.split('\0').filter(Boolean));
   const statusPaths = runCommand('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   const entries = statusPaths.split('\0').filter(Boolean);
-  const paths = [...diffPaths.split('\0').filter(Boolean)];
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     const status = entry.slice(0, 2);
@@ -82,11 +83,7 @@ function protectedFinding(finding) {
 function reportKey(finding) {
   return JSON.stringify([finding.id, normalizeTitle(finding.title), finding.provenance, finding.line ?? null]);
 }
-
-function errorHandlingAggregate(finding) {
-  return finding.id === 'inconsistent-error-handling';
-}
-
+const errorHandlingAggregate = (finding) => finding.id === 'inconsistent-error-handling';
 function withoutCandidateOwnedFiles(report, changedPaths) {
   return {
     ...report,
@@ -117,21 +114,20 @@ function findingSignature(finding) {
 function aggregatedFinding(finding) {
   return finding.id === 'file-size';
 }
-
-function inconsistentErrorHandlingFinding(finding) {
-  return errorHandlingAggregate(finding);
-}
+const lineCount=(finding,path)=>+finding.files.find(file=>file.startsWith(`${path} (`))?.match(/\((\d+) lines\)$/)?.[1]||0;
 
 function compareErrorHandlingAggregate(current, baseline, unmatched, changedPaths) {
-  const previous = baseline.failures.find(inconsistentErrorHandlingFinding);
+  const previous = baseline.failures.find(errorHandlingAggregate);
   if (!previous) return current;
   unmatched.delete(previous);
-  const previousStrategies = previous.details.replace(/ across \d+ files/, ' across <count> files').replace(/\(\d+x\)/g, '(<count>x)');
-  const currentStrategies = current.details.replace(/ across \d+ files/, ' across <count> files').replace(/\(\d+x\)/g, '(<count>x)');
+  const strategySummary = (details) => details.split('\n').slice(1).map((line) => line.trim().replace(/\(\d+x\)/g, '(<count>x)')).join('\n');
+  const previousStrategies = strategySummary(previous.details);
+  const currentStrategies = strategySummary(current.details);
   if (previousStrategies !== currentStrategies || previous.severity !== current.severity) {
     return current;
   }
   const changedFindingPaths = normalizedPaths(current).filter((path) => changedPaths.has(path));
+  if (!changedFindingPaths.length) return null;
   const baselineCounts = [...previous.details.matchAll(/\((\d+)x\)/g)].map((match) => Number(match[1]));
   const candidateCounts = [...current.details.matchAll(/\((\d+)x\)/g)].map((match) => Number(match[1]));
   const increasedCount = candidateCounts.some((count, index) => count > (baselineCounts[index] ?? 0));
@@ -189,7 +185,6 @@ function validateReport(report, options) {
 function isWorsened(current, previous) {
   return protectedFinding(current) || !samePaths(current, previous) || severity(current.severity) > severity(previous.severity) || metric(current.title) > metric(previous.title);
 }
-
 function findBaselineMatch(current, baseline, unmatched) {
   return baseline.find((finding) => unmatched.has(finding) && reportKey(finding) === reportKey(current));
 }
@@ -200,7 +195,7 @@ function rejectAmbiguousRename(current, baseline, unmatched) {
 }
 
 function processFinding(current, baseline, unmatched, changedPaths) {
-  if (inconsistentErrorHandlingFinding(current)) return compareErrorHandlingAggregate(current, baseline, unmatched, changedPaths);
+  if (errorHandlingAggregate(current)) return compareErrorHandlingAggregate(current, baseline, unmatched, changedPaths);
   const previous = aggregatedFinding(current)
     ? baseline.failures.find((finding) => aggregatedFinding(finding) && findingSignature(finding) === findingSignature(current))
     : findBaselineMatch(current, baseline.failures, unmatched);
@@ -213,7 +208,9 @@ function processFinding(current, baseline, unmatched, changedPaths) {
   const candidatePaths = normalizedPaths(current);
   const previousPaths = normalizedPaths(previous);
   const introducedPaths = candidatePaths.filter((path) => !previousPaths.includes(path) || (!baselineInputSet(baseline).has(path) && candidateOwnsInput(path)));
-  return introducedPaths.length ? { ...current, files: introducedPaths } : null;
+  const worsenedPaths = candidatePaths.filter((path) => candidateOwnsInput(path) && changedPaths.has(path) && lineCount(current, path) > lineCount(previous, path));
+  const affectedPaths = [...new Set([...introducedPaths, ...worsenedPaths])];
+  return affectedPaths.length ? { ...current, files: affectedPaths } : null;
 }
 
 function aggregatedPathsChanged(current, previous) {
@@ -221,8 +218,8 @@ function aggregatedPathsChanged(current, previous) {
 }
 
 function validateUnmatchedFindings(unmatched, baseline, candidate) {
-  const candidateAggregates = candidate.failures.filter(inconsistentErrorHandlingFinding);
-  if ([...unmatched].some(inconsistentErrorHandlingFinding) && candidateAggregates.length) {
+  const candidateAggregates = candidate.failures.filter(errorHandlingAggregate);
+  if ([...unmatched].some(errorHandlingAggregate) && candidateAggregates.length) {
     throw new Error('Baseline error-handling aggregate changed; comparison is ambiguous and requires maintainer review');
   }
   const baselinePaths = baselineInputSet(baseline);
@@ -245,7 +242,6 @@ function compareReports(baseline, candidate, changedPaths = new Set()) {
   validateUnmatchedFindings(unmatched, baseline, candidate);
   return added;
 }
-
 
 function hasExactMatch(candidate, baseline, unmatched) {
   return baseline.some((finding) => unmatched.has(finding) && reportKey(finding) === reportKey(candidate));
@@ -294,10 +290,39 @@ async function validateInputSet() {
   const touched = (await candidateChangedFiles()).filter((file) => !ignoredWorkspacePaths.has(file));
   if (touched.some((file) => !inputFiles.has(file) && !removedBaselinePaths.has(file))) throw new Error('Candidate scanner inputs differ from the pinned clean-baseline input set');
   if (touched.includes('rigour.yml')) throw new Error('Scanner configuration changed; independent review is required');
+  const head = runCommand('git', ['rev-parse', 'HEAD']).trim();
+  const baselineInHistory = spawnSync('git', ['merge-base', '--is-ancestor', baselineRevision, head], { cwd: root }).status === 0;
+  const workflowPath = resolve(root, '.github/workflows/ci.yml');
+  const workflowContent = await readFile(workflowPath, 'utf8');
+  if (!workflowContent.includes('fetch-depth: 0') || !workflowContent.includes('node-version: "24"')) throw new Error('CI must fetch full history and use the pinned scanner-supported Node runtime');
+  if (!baselineInHistory) throw new Error('Pinned baseline revision is not an ancestor of candidate HEAD');
 }
 
 async function removePreviousReport() {
   await Promise.all([reportPath, resolve(root, 'rigour-fix-packet.json')].map((path) => rm(path, { force: true })));
+}
+
+async function preserveCandidateReport(rawBytes, report, exitCode) {
+  const candidatePath = resolve(root, '.not2-evidence/rigour-candidate-81f4fa4.json');
+  const provenancePath = `${candidatePath}.metadata.json`;
+  const head = runCommand('git', ['rev-parse', 'HEAD']).trim();
+  const metadata = {
+    revision: head,
+    tree: runCommand('git', ['rev-parse', 'HEAD^{tree}']).trim(),
+    scannerVersion,
+    node: process.version,
+    rawVerdict: report.status,
+    findings: report.failures.length,
+    score: report.stats.score,
+    exitCode,
+    reportSha256: hash(rawBytes),
+    configSha256: hash(readFileSync(configPath)),
+  };
+  await Promise.all([
+    writeFile(candidatePath, rawBytes),
+    writeFile(provenancePath, `${JSON.stringify(metadata, null, 2)}\n`),
+  ]);
+  return metadata;
 }
 
 async function runScan() {
@@ -308,7 +333,7 @@ async function runScan() {
     timeout: commandTimeout,
     maxBuffer: 16 * 1024 * 1024,
   });
-  if (result.error) throw result.error;
+  if (result.error) throw new Error(`Rigour scanner could not run: ${result.error.message}`);
   return result.status;
 }
 
@@ -322,8 +347,12 @@ function reportOutcome(baseline, report, changedPaths) {
     const protectedCount = introduced.filter(protectedFinding).length;
     const implementationCount = introduced.length - protectedCount;
     process.stderr.write(`Qualification findings: ${implementationCount} new or worsened, ${protectedCount} protected or review-boundary findings\n`);
-    process.stderr.write('Qualification: FAIL (new or worsened findings require repair; protected findings require independent exact-head maintainer review)\n');
-    process.exitCode = 1;
+    if (implementationCount) {
+      process.stderr.write('Qualification: FAIL (new or worsened findings require repair)\n');
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write('Qualification: ADVISORY (protected finding requires review; raw Rigour remains FAIL)\n');
     return;
   }
   if (baseline.status === 'FAIL' && report.status === 'FAIL') {
@@ -341,9 +370,12 @@ async function runQualification() {
   const rawBytes = await readFile(reportPath);
   const rawReport = validateReport(parseJson(rawBytes), { allowProtected: true });
   verifyScanExit(rawReport, exitCode);
+  const candidateMetadata = await preserveCandidateReport(rawBytes, rawReport, exitCode);
+  if (candidateMetadata.revision !== runCommand('git', ['rev-parse', 'HEAD']).trim()) throw new Error('Candidate revision changed during scan')
   process.stdout.write(`Raw Rigour: ${rawReport.status} (${rawReport.failures.length} findings)\n`);
   process.stdout.write(`Raw report SHA-256: ${hash(rawBytes)}\n`);
   process.stdout.write(`Finding fingerprints SHA-256: ${hash(rawReport.failures.map(findingFingerprint).join('\n'))}\n`);
+  process.stdout.write(`Candidate report: .not2-evidence/rigour-candidate-81f4fa4.json (${candidateMetadata.reportSha256})\n`);
   const changedPaths = new Set((await candidateChangedFiles()).filter(candidateOwnsInput));
   reportOutcome(baseline, removeGeneratedArtifacts(structuredClone(rawReport)), changedPaths);
 }

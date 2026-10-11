@@ -18,10 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - run: npm ci
 
@@ -36,7 +38,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rigour-report
-          path: rigour-report.json
+          path: |
+            rigour-report.json
+            .not2-evidence/rigour-candidate-81f4fa4.json
+            .not2-evidence/rigour-candidate-81f4fa4.json.metadata.json
           if-no-files-found: warn
 
       - name: Upload qualification provenance
