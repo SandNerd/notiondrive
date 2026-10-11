@@ -171,7 +171,9 @@ test('downloadPages supports string-based frontmatter from properties', async ()
       createNoopHooks(),
       { format: 'markdown-tree', frontmatter: 'metadata' }
     );
-    const contentStr = await readFile(path.join(outDir, 'My-Page.md'), 'utf8');
+    assert.deepEqual(statsStr.errors, []);
+    assert.deepEqual(statsStr.writtenFiles.map((file) => path.basename(file)), ['my-page.md']);
+    const contentStr = await readFile(path.join(outDir, 'my-page.md'), 'utf8');
     assert.ok(contentStr.startsWith('---\nkey: value\ntags: test\n---\n\n'), 'Frontmatter should contain metadata property content');
 
     // 2. Test empty/missing property should omit frontmatter block
@@ -220,7 +222,7 @@ test('downloadDatabase supported string-based frontmatter for rows', async () =>
       getBlockChildrenDeep: async () => ({ blocks: [], warnings: [] }),
     };
 
-    await downloadPages(
+    const stats = await downloadPages(
       [{ id: 'db-1', name: 'My DB', type: 'database' }],
       outDir,
       notion,
@@ -228,7 +230,12 @@ test('downloadDatabase supported string-based frontmatter for rows', async () =>
       { format: 'markdown-tree', frontmatter: 'Header' }
     );
     
-    const rowContent = await readFile(path.join(outDir, 'My-DB', 'Row-1.md'), 'utf8');
+    assert.deepEqual(stats.errors, []);
+    assert.deepEqual(stats.writtenFiles.map((file) => path.relative(outDir, file)), [
+      path.join('my-db', 'Row-1.md'),
+      path.join('my-db', 'My-DB.md'),
+    ]);
+    const rowContent = await readFile(path.join(outDir, 'my-db', 'Row-1.md'), 'utf8');
     assert.ok(rowContent.startsWith('---\nlayout: post\n---\n\n'), 'Row should have frontmatter from "Header" property');
   } finally {
     await rm(outDir, { recursive: true, force: true });
