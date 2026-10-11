@@ -4,6 +4,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, master]
   pull_request:
@@ -23,3 +24,5 @@ jobs:
           node-version: "20"
 
       - run: npm ci
+
+      - run: npm test

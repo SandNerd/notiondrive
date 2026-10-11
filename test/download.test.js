@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { downloadPages } from '../src/download.js';
@@ -148,6 +148,7 @@ test('downloadPages exports a flat markdown database as a single table file', as
 
 test('downloadPages supports string-based frontmatter from properties', async () => {
   const outDir = await mkdtemp(path.join(tmpdir(), 'notiondrive-fm-str-'));
+  await mkdir(outDir, { recursive: true });
   try {
     const notion = {
       throttledClient: {},
@@ -170,7 +171,9 @@ test('downloadPages supports string-based frontmatter from properties', async ()
       createNoopHooks(),
       { format: 'markdown-tree', frontmatter: 'metadata' }
     );
-    const contentStr = await readFile(path.join(outDir, 'My-Page.md'), 'utf8');
+    assert.deepEqual(statsStr.errors, []);
+    assert.deepEqual(statsStr.writtenFiles.map((file) => path.basename(file)), ['my-page.md']);
+    const contentStr = await readFile(path.join(outDir, 'my-page.md'), 'utf8');
     assert.ok(contentStr.startsWith('---\nkey: value\ntags: test\n---\n\n'), 'Frontmatter should contain metadata property content');
 
     // 2. Test empty/missing property should omit frontmatter block
@@ -181,7 +184,7 @@ test('downloadPages supports string-based frontmatter from properties', async ()
       createNoopHooks(),
       { format: 'markdown-tree', frontmatter: 'empty_prop' }
     );
-    const contentEmpty = await readFile(path.join(outDir, 'Empty-FM.md'), 'utf8');
+    const contentEmpty = await readFile(path.join(outDir, 'empty-fm.md'), 'utf8');
     assert.ok(!contentEmpty.includes('---'), 'Should not contain frontmatter block for empty property');
 
     // 3. Test boolean true still works
@@ -192,7 +195,7 @@ test('downloadPages supports string-based frontmatter from properties', async ()
       createNoopHooks(),
       { format: 'markdown-tree', frontmatter: true }
     );
-    const contentBool = await readFile(path.join(outDir, 'Bool-FM.md'), 'utf8');
+    const contentBool = await readFile(path.join(outDir, 'bool-fm.md'), 'utf8');
     assert.ok(contentBool.includes('---'), 'Should contain frontmatter block for boolean true');
     assert.ok(contentBool.includes('metadata:'), 'Should contain standard YAML properties');
 
@@ -203,6 +206,7 @@ test('downloadPages supports string-based frontmatter from properties', async ()
 
 test('downloadDatabase supported string-based frontmatter for rows', async () => {
   const outDir = await mkdtemp(path.join(tmpdir(), 'notiondrive-db-fm-str-'));
+  await mkdir(outDir, { recursive: true });
   try {
     const notion = {
       throttledClient: {},
@@ -218,7 +222,7 @@ test('downloadDatabase supported string-based frontmatter for rows', async () =>
       getBlockChildrenDeep: async () => ({ blocks: [], warnings: [] }),
     };
 
-    await downloadPages(
+    const stats = await downloadPages(
       [{ id: 'db-1', name: 'My DB', type: 'database' }],
       outDir,
       notion,
@@ -226,7 +230,12 @@ test('downloadDatabase supported string-based frontmatter for rows', async () =>
       { format: 'markdown-tree', frontmatter: 'Header' }
     );
     
-    const rowContent = await readFile(path.join(outDir, 'My-DB', 'Row-1.md'), 'utf8');
+    assert.deepEqual(stats.errors, []);
+    assert.deepEqual(stats.writtenFiles.map((file) => path.relative(outDir, file)), [
+      path.join('my-db', 'Row-1.md'),
+      path.join('my-db', 'My-DB.md'),
+    ]);
+    const rowContent = await readFile(path.join(outDir, 'my-db', 'Row-1.md'), 'utf8');
     assert.ok(rowContent.startsWith('---\nlayout: post\n---\n\n'), 'Row should have frontmatter from "Header" property');
   } finally {
     await rm(outDir, { recursive: true, force: true });

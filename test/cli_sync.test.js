@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { parseArgs, loadLocalManifest } from '../src/cli.js';
 
 test('parseArgs detects sync command', () => {
@@ -17,7 +18,7 @@ test('parseArgs combines sync with other flags', () => {
 });
 
 test('loadLocalManifest returns null when file missing', () => {
-  const tmpDir = mkdtempSync(path.join('/tmp', 'notiondrive-test-'));
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'notiondrive-test-'));
   const originalCwd = process.cwd();
   try {
     process.chdir(tmpDir);
@@ -30,7 +31,7 @@ test('loadLocalManifest returns null when file missing', () => {
 });
 
 test('loadLocalManifest parses valid manifest', () => {
-  const tmpDir = mkdtempSync(path.join('/tmp', 'notiondrive-test-'));
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'notiondrive-test-'));
   const originalCwd = process.cwd();
   try {
     process.chdir(tmpDir);
@@ -55,7 +56,7 @@ test('loadLocalManifest parses valid manifest', () => {
 });
 
 test('loadLocalManifest throws on invalid JSON', () => {
-  const tmpDir = mkdtempSync(path.join('/tmp', 'notiondrive-test-'));
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'notiondrive-test-'));
   const originalCwd = process.cwd();
   try {
     process.chdir(tmpDir);
@@ -71,7 +72,7 @@ test('loadLocalManifest throws on invalid JSON', () => {
 });
 
 test('loadLocalManifest throws when targets array missing', () => {
-  const tmpDir = mkdtempSync(path.join('/tmp', 'notiondrive-test-'));
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'notiondrive-test-'));
   const originalCwd = process.cwd();
   try {
     process.chdir(tmpDir);
@@ -87,7 +88,7 @@ test('loadLocalManifest throws when targets array missing', () => {
 });
 
 test('loadLocalManifest flattens grouped targets into unified targets array', () => {
-  const tmpDir = mkdtempSync(path.join('/tmp', 'notiondrive-test-'));
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'notiondrive-test-'));
   const originalCwd = process.cwd();
   try {
     process.chdir(tmpDir);
