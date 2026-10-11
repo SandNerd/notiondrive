@@ -8,7 +8,7 @@
 
 `src/planner.js` consumes discovery results, Git/filesystem evidence, remote page content/revisions and the ledger reader from `src/state.js`. It reports classifications and reasons without applying them. Inadequate historical baseline evidence remains unknown; matching timestamps or filenames do not establish synchronization.
 
-Downloads and synchronization are separate. `src/download.js` renders and writes content; `src/parser.js` and `src/fetch-stream.js` support conversion and asset handling. `src/sync.js` coordinates sync/status/watch operations and ledger updates. `src/utils.js` contains shared helpers. Discovery and planning do not invoke these writers.
+Downloads and synchronization are separate. `src/download.js` renders and writes local content; `src/parser.js` and `src/fetch-stream.js` support conversion and asset handling. `src/sync.js` coordinates sync/status/watch operations. In push-only, two-way, and watch flows, its push path can replace Notion page content (with a guard for rich Notion structures); pull/download paths write local Markdown. Successful sync paths also persist synchronization metadata through `src/state.js`. These are separate effects: remote page writes, local Markdown writes, and local ledger persistence. Discovery and planning do not invoke these writers.
 
 ## Credentials and state
 
