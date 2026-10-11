@@ -31,7 +31,9 @@
   "scripts": {
     "test": "node --test",
     "test:coverage": "node --test --experimental-test-coverage",
-    "validate-config": "node scripts/validate-config.js ./notiondrive.config.json"
+    "validate-config": "node scripts/validate-config.js ./notiondrive.config.json",
+    "qualify:rigour": "node scripts/rigour-qualification.js",
+    "rigour": "rigour"
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
@@ -39,6 +41,7 @@
     "notion-to-md": "^3.1.9"
   },
   "devDependencies": {
+    "@rigour-labs/cli": "7.0.2",
     "ajv": "^8.20.0",
     "ajv-formats": "^2.1.1"
   }

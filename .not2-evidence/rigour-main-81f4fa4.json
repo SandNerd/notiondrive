@@ -1,0 +1,465 @@
+{
+  "status": "FAIL",
+  "summary": {
+    "environment-alignment": "PASS",
+    "retry_loop_breaker": "PASS",
+    "file-size": "FAIL",
+    "content-check": "PASS",
+    "structure-check": "PASS",
+    "ast-analysis": "FAIL",
+    "dependency-guardian": "PASS",
+    "file-guard": "PASS",
+    "coverage-guard": "PASS",
+    "context-drift": "PASS",
+    "semantic-bugs": "PASS",
+    "security-patterns": "PASS",
+    "frontend-secret-exposure": "PASS",
+    "duplication-drift": "PASS",
+    "hallucinated-imports": "PASS",
+    "inconsistent-error-handling": "FAIL",
+    "context-window-artifacts": "PASS",
+    "promise-safety": "PASS",
+    "phantom-apis": "PASS",
+    "deprecated-apis": "PASS",
+    "test-quality": "PASS",
+    "side-effect-analysis": "PASS",
+    "style-drift": "PASS",
+    "logic-drift": "PASS"
+  },
+  "failures": [
+    {
+      "id": "file-size",
+      "title": "File Size Limit",
+      "details": "The following files exceed the maximum limit of 400 lines:",
+      "severity": "low",
+      "provenance": "traditional",
+      "files": [
+        "src/cli.js (1169 lines)",
+        "src/download.js (1319 lines)",
+        "src/parser.js (433 lines)",
+        "src/sync.js (1857 lines)",
+        "test/sync.integration.test.js (968 lines)"
+      ],
+      "hint": "Break these files into smaller, more modular components to improve maintainability (SOLID - Single Responsibility Principle)."
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'browseAndSelect' has cyclomatic complexity of 28 (max: 10)",
+      "details": "High complexity detected in src/cli.js",
+      "files": [
+        "src/cli.js"
+      ],
+      "hint": "Refactor 'browseAndSelect' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'parseArgs' has cyclomatic complexity of 51 (max: 10)",
+      "details": "High complexity detected in src/cli.js",
+      "files": [
+        "src/cli.js"
+      ],
+      "hint": "Refactor 'parseArgs' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'resolveDiscoverySource' has cyclomatic complexity of 13 (max: 10)",
+      "details": "High complexity detected in src/cli.js",
+      "files": [
+        "src/cli.js"
+      ],
+      "hint": "Refactor 'resolveDiscoverySource' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'runPlan' has cyclomatic complexity of 20 (max: 10)",
+      "details": "High complexity detected in src/cli.js",
+      "files": [
+        "src/cli.js"
+      ],
+      "hint": "Refactor 'runPlan' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'runDiscovery' has cyclomatic complexity of 19 (max: 10)",
+      "details": "High complexity detected in src/cli.js",
+      "files": [
+        "src/cli.js"
+      ],
+      "hint": "Refactor 'runDiscovery' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY_LIMIT_EXCEEDED",
+      "title": "More than 5 AST_COMPLEXITY violations in src/cli.js",
+      "details": "Truncated output: showing first 5 violations. Consider fixing the root cause.",
+      "files": [
+        "src/cli.js"
+      ],
+      "hint": "This file has many violations. Fix them systematically or exclude the file if it's legacy code.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function '_expandGroups' has cyclomatic complexity of 14 (max: 10)",
+      "details": "High complexity detected in src/config.js",
+      "files": [
+        "src/config.js"
+      ],
+      "hint": "Refactor '_expandGroups' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'propertyValue' has cyclomatic complexity of 13 (max: 10)",
+      "details": "High complexity detected in src/discovery.js",
+      "files": [
+        "src/discovery.js"
+      ],
+      "hint": "Refactor 'propertyValue' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'checkPath' has cyclomatic complexity of 31 (max: 10)",
+      "details": "High complexity detected in src/discovery.js",
+      "files": [
+        "src/discovery.js"
+      ],
+      "hint": "Refactor 'checkPath' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'discoverDocuments' has cyclomatic complexity of 52 (max: 10)",
+      "details": "High complexity detected in src/discovery.js",
+      "files": [
+        "src/discovery.js"
+      ],
+      "hint": "Refactor 'discoverDocuments' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'convertToCSV' has cyclomatic complexity of 13 (max: 10)",
+      "details": "High complexity detected in src/download.js",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "Refactor 'convertToCSV' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'childDatabaseToMarkdownTable' has cyclomatic complexity of 30 (max: 10)",
+      "details": "High complexity detected in src/download.js",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "Refactor 'childDatabaseToMarkdownTable' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'resolveSyncedBlockChildren' has cyclomatic complexity of 12 (max: 10)",
+      "details": "High complexity detected in src/download.js",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "Refactor 'resolveSyncedBlockChildren' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'assembleMarkdown' has cyclomatic complexity of 11 (max: 10)",
+      "details": "High complexity detected in src/download.js",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "Refactor 'assembleMarkdown' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_MAX_PARAMS",
+      "title": "Function 'blocksToInlineParts' has 6 parameters (max: 5)",
+      "details": "High parameter count detected in src/download.js",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "Reduce number of parameters or use an options object.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'resolveBlock' has cyclomatic complexity of 26 (max: 10)",
+      "details": "High complexity detected in src/download.js",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "Refactor 'resolveBlock' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY_LIMIT_EXCEEDED",
+      "title": "More than 5 AST_COMPLEXITY violations in src/download.js",
+      "details": "Truncated output: showing first 5 violations. Consider fixing the root cause.",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "This file has many violations. Fix them systematically or exclude the file if it's legacy code.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_MAX_PARAMS",
+      "title": "Function 'downloadPage' has 8 parameters (max: 5)",
+      "details": "High parameter count detected in src/download.js",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "Reduce number of parameters or use an options object.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_MAX_PARAMS",
+      "title": "Function 'downloadDatabase' has 7 parameters (max: 5)",
+      "details": "High parameter count detected in src/download.js",
+      "files": [
+        "src/download.js"
+      ],
+      "hint": "Reduce number of parameters or use an options object.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'downloadToPath' has cyclomatic complexity of 41 (max: 10)",
+      "details": "High complexity detected in src/fetch-stream.js",
+      "files": [
+        "src/fetch-stream.js"
+      ],
+      "hint": "Refactor 'downloadToPath' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'extractTitle' has cyclomatic complexity of 24 (max: 10)",
+      "details": "High complexity detected in src/notion-helpers.js",
+      "files": [
+        "src/notion-helpers.js"
+      ],
+      "hint": "Refactor 'extractTitle' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'findTitleArray' has cyclomatic complexity of 15 (max: 10)",
+      "details": "High complexity detected in src/notion-helpers.js",
+      "files": [
+        "src/notion-helpers.js"
+      ],
+      "hint": "Refactor 'findTitleArray' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_MAX_METHODS",
+      "title": "Class 'NotionClient' has 13 methods (max: 10)",
+      "details": "God Object pattern detected in src/notion.js",
+      "files": [
+        "src/notion.js"
+      ],
+      "hint": "Class 'NotionClient' is becoming too large. Split it into smaller services.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'getTopLevelPages' has cyclomatic complexity of 24 (max: 10)",
+      "details": "High complexity detected in src/notion.js",
+      "files": [
+        "src/notion.js"
+      ],
+      "hint": "Refactor 'getTopLevelPages' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'splitIntoChunksPreservingLines' has cyclomatic complexity of 11 (max: 10)",
+      "details": "High complexity detected in src/parser.js",
+      "files": [
+        "src/parser.js"
+      ],
+      "hint": "Refactor 'splitIntoChunksPreservingLines' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'parseMarkdownToRichText' has cyclomatic complexity of 13 (max: 10)",
+      "details": "High complexity detected in src/parser.js",
+      "files": [
+        "src/parser.js"
+      ],
+      "hint": "Refactor 'parseMarkdownToRichText' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'markdownToNotionBlocks' has cyclomatic complexity of 31 (max: 10)",
+      "details": "High complexity detected in src/parser.js",
+      "files": [
+        "src/parser.js"
+      ],
+      "hint": "Refactor 'markdownToNotionBlocks' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'classify' has cyclomatic complexity of 26 (max: 10)",
+      "details": "High complexity detected in src/planner.js",
+      "files": [
+        "src/planner.js"
+      ],
+      "hint": "Refactor 'classify' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'createPlan' has cyclomatic complexity of 37 (max: 10)",
+      "details": "High complexity detected in src/planner.js",
+      "files": [
+        "src/planner.js"
+      ],
+      "hint": "Refactor 'createPlan' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'getManifestEntriesForPath' has cyclomatic complexity of 18 (max: 10)",
+      "details": "High complexity detected in src/sync.js",
+      "files": [
+        "src/sync.js"
+      ],
+      "hint": "Refactor 'getManifestEntriesForPath' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'pushLocalFileToNotion' has cyclomatic complexity of 45 (max: 10)",
+      "details": "High complexity detected in src/sync.js",
+      "files": [
+        "src/sync.js"
+      ],
+      "hint": "Refactor 'pushLocalFileToNotion' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'extractFrontmatterKeyValue' has cyclomatic complexity of 12 (max: 10)",
+      "details": "High complexity detected in src/sync.js",
+      "files": [
+        "src/sync.js"
+      ],
+      "hint": "Refactor 'extractFrontmatterKeyValue' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'applyFrontmatterTarget' has cyclomatic complexity of 24 (max: 10)",
+      "details": "High complexity detected in src/sync.js",
+      "files": [
+        "src/sync.js"
+      ],
+      "hint": "Refactor 'applyFrontmatterTarget' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY",
+      "title": "Function 'executeSyncMode' has cyclomatic complexity of 185 (max: 10)",
+      "details": "High complexity detected in src/sync.js",
+      "files": [
+        "src/sync.js"
+      ],
+      "hint": "Refactor 'executeSyncMode' into smaller, more focused functions.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "AST_COMPLEXITY_LIMIT_EXCEEDED",
+      "title": "More than 5 AST_COMPLEXITY violations in src/sync.js",
+      "details": "Truncated output: showing first 5 violations. Consider fixing the root cause.",
+      "files": [
+        "src/sync.js"
+      ],
+      "hint": "This file has many violations. Fix them systematically or exclude the file if it's legacy code.",
+      "severity": "medium",
+      "provenance": "traditional"
+    },
+    {
+      "id": "inconsistent-error-handling",
+      "title": "Inconsistent Error Handling",
+      "details": "Inconsistent error handling for 'try-catch': 4 different strategies found across 16 files:\n  • other (169x): scripts/check-manifest-collisions.cjs, scripts/check-manifest-collisions.js, scripts/disable-duplicate-targets.cjs\n  • log (1x): scripts/validate-config.js\n  • rethrow (5x): src/discovery.js, src/fetch-stream.js\n  • return-error (7x): src/state.js, src/sync.js",
+      "severity": "high",
+      "provenance": "ai-drift",
+      "files": [
+        "scripts/check-manifest-collisions.cjs",
+        "scripts/check-manifest-collisions.js",
+        "scripts/disable-duplicate-targets.cjs",
+        "scripts/validate-config.js",
+        "src/cli.js"
+      ],
+      "line": 33,
+      "hint": "Standardize error handling for 'try-catch'. Create a shared error handler or establish a project convention. AI agents often write error handling from scratch each session, leading to divergent patterns."
+    }
+  ],
+  "stats": {
+    "duration_ms": 878,
+    "score": 44,
+    "ai_health_score": 90,
+    "structural_score": 54,
+    "severity_breakdown": {
+      "low": 1,
+      "medium": 35,
+      "high": 1
+    },
+    "provenance_breakdown": {
+      "ai-drift": 1,
+      "traditional": 36,
+      "security": 0,
+      "governance": 0,
+      "deep-analysis": 0
+    }
+  }
+}

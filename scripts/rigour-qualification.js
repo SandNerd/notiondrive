@@ -1,0 +1,364 @@
+#!/usr/bin/env node
+import { createHash } from 'node:crypto';
+import parseJsonWithoutExceptions from 'json-parse-even-better-errors';
+import { readFile, rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const commandTimeout = 120_000;
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const baselinePath = resolve(root, '.not2-evidence/rigour-main-81f4fa4.json');
+const metadataPath = resolve(root, '.not2-evidence/rigour-main-81f4fa4.json.metadata.json');
+const reportPath = resolve(root, 'rigour-report.json');
+const inputFiles = new Set(['AGENTS.md', '.github/workflows/ci.yml', 'package.json', 'package-lock.json', 'NOT-2-DECISION.md', 'scripts/rigour-qualification.js', 'test/rigour-qualification.test.js', '.not2-evidence/rigour-main-81f4fa4.json', '.not2-evidence/rigour-main-81f4fa4.json.metadata.json', '.not2-evidence/rigour-candidate-81f4fa4.json', '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json', 'rigour-report.json', 'rigour-fix-packet.json']);
+const ignoredWorkspacePaths = new Set(['.serena/.gitignore', '.serena/project.yml']);
+const removedBaselinePaths = new Set(['scripts/check-manifest-collisions.cjs', 'scripts/disable-duplicate-targets.cjs']);
+const baselineTrackedPaths = new Set([...removedBaselinePaths, 'scripts/check-manifest-collisions.js', 'scripts/validate-config.js', 'src/cli.js', 'src/download.js', 'src/parser.js', 'src/sync.js', 'test/sync.integration.test.js']);
+const configPath = resolve(root, 'rigour.yml');
+const baselineRevision = '81f4fa4293c3cc0234ed0586bdf945c3f0d00f7a';
+const scannerVersion = '7.0.2';
+
+function hash(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function runCommand(command, args) {
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', timeout: commandTimeout, maxBuffer: 16 * 1024 * 1024 });
+  if (result.error || result.status !== 0) throw new Error(`Command failed: ${command} ${args.join(' ')}`);
+  return result.stdout;
+}
+
+function candidateChangedFiles() {
+  const diffPaths = runCommand('git', ['diff', '--name-only', '-z', `${baselineRevision}...HEAD`]);
+  const statusPaths = runCommand('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const entries = statusPaths.split('\0').filter(Boolean);
+  const paths = [...diffPaths.split('\0').filter(Boolean)];
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    const status = entry.slice(0, 2);
+    const path = entry.slice(3);
+    if (status.includes('R') || status.includes('C')) paths.push(entries[++index] ?? path, path);
+    else paths.push(path);
+  }
+  const stagedPaths = runCommand('git', ['diff', '--cached', '--name-only', '-z']);
+  paths.push(...stagedPaths.split('\0').filter(Boolean));
+  return [...new Set(paths)];
+}
+
+function normalizedPaths(finding) {
+  return finding.files.map((file) => file.replace(/ \(\d+ lines\)$/, '')).sort();
+}
+
+function validateIdentityShape(finding) {
+  if (!finding.id || !finding.title || !Array.isArray(finding.files) || !finding.files.length) throw new Error('Finding identity is incomplete');
+  if (finding.files.some((file) => typeof file !== 'string')) throw new Error('Finding identity contains an invalid path');
+}
+
+function identity(finding, { allowProtected = false } = {}) {
+  validateIdentityShape(finding);
+  if (!allowProtected && protectedFinding(finding)) throw new Error('Protected finding cannot be baseline-excused');
+  if (finding.line !== undefined && (!Number.isInteger(finding.line) || finding.line < 1 || finding.provenance !== 'ai-drift')) throw new Error('Line-specific finding identity is ambiguous');
+  return JSON.stringify([finding.id, finding.title, normalizedPaths(finding), finding.line ?? null]);
+}
+
+function metric(title) {
+  return Number(title.match(/\b(?:complexity of|has)\s+(\d+)/i)?.[1] ?? title.match(/\b(\d+)\s*\(max: \d+\)/)?.[1] ?? 0);
+}
+
+function normalizeTitle(title) {
+  return title.replace(/(\b(?:complexity of|has)\s+)\d+/ig, '$1<number>').replace(/\b\d+(?=\s*\(max: \d+\))/g, '<number>').replace(/\s*\(max: \d+\)/g, '');
+}
+
+function severity(value) {
+  return ({ low: 1, medium: 2, high: 3, critical: 4 })[value] ?? 0;
+}
+
+function protectedFinding(finding) {
+  return ['security', 'governance'].includes(finding.provenance) || /secret|data.loss|protected.path|safety/i.test(`${finding.id} ${finding.title}`);
+}
+
+function reportKey(finding) {
+  return JSON.stringify([finding.id, normalizeTitle(finding.title), finding.provenance, finding.line ?? null]);
+}
+
+function errorHandlingAggregate(finding) {
+  return finding.id === 'inconsistent-error-handling';
+}
+
+function withoutCandidateOwnedFiles(report, changedPaths) {
+  return {
+    ...report,
+    failures: report.failures.map((finding) => {
+      if (!errorHandlingAggregate(finding)) return finding;
+      const files = finding.files.filter((path) => !changedPaths.has(path));
+      return { ...finding, files };
+    }),
+  };
+}
+
+function findingFingerprint(finding) {
+  return createHash('sha256').update(JSON.stringify({
+    id: finding.id,
+    title: finding.title,
+    severity: finding.severity,
+    provenance: finding.provenance,
+    files: normalizedPaths(finding),
+    line: finding.line ?? null,
+    message: finding.message ?? null,
+  })).digest('hex');
+}
+
+function findingSignature(finding) {
+  return JSON.stringify([finding.id, normalizeTitle(finding.title), finding.provenance, finding.line ?? null]);
+}
+
+function aggregatedFinding(finding) {
+  return finding.id === 'file-size';
+}
+
+function inconsistentErrorHandlingFinding(finding) {
+  return errorHandlingAggregate(finding);
+}
+
+function compareErrorHandlingAggregate(current, baseline, unmatched, changedPaths) {
+  const previous = baseline.failures.find(inconsistentErrorHandlingFinding);
+  if (!previous) return current;
+  unmatched.delete(previous);
+  const previousStrategies = previous.details.replace(/ across \d+ files/, ' across <count> files').replace(/\(\d+x\)/g, '(<count>x)');
+  const currentStrategies = current.details.replace(/ across \d+ files/, ' across <count> files').replace(/\(\d+x\)/g, '(<count>x)');
+  if (previousStrategies !== currentStrategies || previous.severity !== current.severity) {
+    return current;
+  }
+  const changedFindingPaths = normalizedPaths(current).filter((path) => changedPaths.has(path));
+  const baselineCounts = [...previous.details.matchAll(/\((\d+)x\)/g)].map((match) => Number(match[1]));
+  const candidateCounts = [...current.details.matchAll(/\((\d+)x\)/g)].map((match) => Number(match[1]));
+  const increasedCount = candidateCounts.some((count, index) => count > (baselineCounts[index] ?? 0));
+  return changedFindingPaths.length && increasedCount ? { ...current, files: changedFindingPaths } : null;
+}
+
+function removeGeneratedArtifacts(report) {
+  report.failures = report.failures.flatMap((finding) => {
+    if (finding.id !== 'file-size') return [finding];
+    const files = finding.files.filter((file) => !file.startsWith('rigour-fix-packet.json (') && file !== 'rigour-fix-packet.json');
+    return files.length ? [{ ...finding, files }] : [];
+  });
+  return report;
+}
+
+function candidateOwnsInput(path) {
+  return inputFiles.has(path) || ignoredWorkspacePaths.has(path);
+}
+
+function candidateInputSet(report) {
+  return new Set(report.failures.flatMap((finding) => normalizedPaths(finding)).filter(candidateOwnsInput));
+}
+
+function baselineInputSet(report) {
+  return new Set(report.failures.flatMap((finding) => normalizedPaths(finding)).filter((path) => baselineTrackedPaths.has(path)));
+}
+
+function baselinePathsRemovedFromCandidate(baseline) {
+  return new Set([...removedBaselinePaths].filter((path) => baselineInputSet(baseline).has(path)));
+}
+
+function validateReportShape(report) {
+  if (!report || !['PASS', 'FAIL'].includes(report.status) || !Array.isArray(report.failures) || !report.summary || !report.stats) throw new Error('Rigour report is incomplete');
+  validateReportStats(report.stats);
+  if (Object.values(report.summary).some((status) => !['PASS', 'FAIL'].includes(status))) throw new Error('Rigour gate summary is incomplete');
+}
+
+function validateReportStats(stats) {
+  if (!Number.isFinite(stats.score) || !Number.isFinite(stats.duration_ms) || !stats.severity_breakdown || !stats.provenance_breakdown) throw new Error('Rigour report statistics are incomplete');
+}
+
+function validateFindings(findings, options) {
+  for (const finding of findings) {
+    identity(finding, options);
+    if (!['low', 'medium', 'high', 'critical'].includes(finding.severity)) throw new Error('Finding severity is incomplete');
+  }
+}
+
+function validateReport(report, options) {
+  validateReportShape(report);
+  validateFindings(report.failures, options);
+  return report;
+}
+
+function isWorsened(current, previous) {
+  return protectedFinding(current) || !samePaths(current, previous) || severity(current.severity) > severity(previous.severity) || metric(current.title) > metric(previous.title);
+}
+
+function findBaselineMatch(current, baseline, unmatched) {
+  return baseline.find((finding) => unmatched.has(finding) && reportKey(finding) === reportKey(current));
+}
+
+function rejectAmbiguousRename(current, baseline, unmatched) {
+  const possible = baseline.some((finding) => unmatched.has(finding) && finding.id === current.id && finding.provenance === current.provenance);
+  if (possible && !metric(current.title)) throw new Error('Baseline finding identity changed; comparison is ambiguous and requires maintainer review');
+}
+
+function processFinding(current, baseline, unmatched, changedPaths) {
+  if (inconsistentErrorHandlingFinding(current)) return compareErrorHandlingAggregate(current, baseline, unmatched, changedPaths);
+  const previous = aggregatedFinding(current)
+    ? baseline.failures.find((finding) => aggregatedFinding(finding) && findingSignature(finding) === findingSignature(current))
+    : findBaselineMatch(current, baseline.failures, unmatched);
+  if (!previous) {
+    if (!aggregatedFinding(current)) rejectAmbiguousRename(current, baseline.failures, unmatched);
+    return current;
+  }
+  unmatched.delete(previous);
+  if (!aggregatedFinding(current)) return isWorsened(current, previous) ? current : null;
+  const candidatePaths = normalizedPaths(current);
+  const previousPaths = normalizedPaths(previous);
+  const introducedPaths = candidatePaths.filter((path) => !previousPaths.includes(path) || (!baselineInputSet(baseline).has(path) && candidateOwnsInput(path)));
+  return introducedPaths.length ? { ...current, files: introducedPaths } : null;
+}
+
+function aggregatedPathsChanged(current, previous) {
+  return aggregatedFinding(current) && normalizedPaths(current).some((path) => !normalizedPaths(previous).includes(path));
+}
+
+function validateUnmatchedFindings(unmatched, baseline, candidate) {
+  const candidateAggregates = candidate.failures.filter(inconsistentErrorHandlingFinding);
+  if ([...unmatched].some(inconsistentErrorHandlingFinding) && candidateAggregates.length) {
+    throw new Error('Baseline error-handling aggregate changed; comparison is ambiguous and requires maintainer review');
+  }
+  const baselinePaths = baselineInputSet(baseline);
+  const candidatePaths = candidateInputSet(candidate);
+  const removedPaths = baselinePathsRemovedFromCandidate(baseline);
+  const missing = [...unmatched].filter((finding) => {
+    const paths = normalizedPaths(finding);
+    if (aggregatedFinding(finding)) return paths.some((path) => candidatePaths.has(path) && !removedPaths.has(path));
+    if (paths.length && paths.every((path) => removedPaths.has(path))) return false;
+    return paths.some((path) => candidatePaths.has(path) && !removedPaths.has(path)) || paths.some((path) => !baselinePaths.has(path) && !removedPaths.has(path));
+  });
+  if (missing.length) throw new Error('Baseline findings disappeared; comparison is ambiguous and requires maintainer review');
+}
+
+function compareReports(baseline, candidate, changedPaths = new Set()) {
+  if (baseline.status !== candidate.status) throw new Error('Raw verdict changed; comparison requires maintainer review');
+  if (baseline.summary?.['ast-analysis'] !== candidate.summary?.['ast-analysis']) throw new Error('Raw AST gate changed; comparison requires maintainer review');
+  const unmatched = new Set(baseline.failures);
+  const added = candidate.failures.map((current) => processFinding(current, baseline, unmatched, changedPaths)).filter(Boolean);
+  validateUnmatchedFindings(unmatched, baseline, candidate);
+  return added;
+}
+
+
+function hasExactMatch(candidate, baseline, unmatched) {
+  return baseline.some((finding) => unmatched.has(finding) && reportKey(finding) === reportKey(candidate));
+}
+
+function samePaths(first, second) {
+  return JSON.stringify(normalizedPaths(first)) === JSON.stringify(normalizedPaths(second));
+}
+
+function parseJson(bytes, label = 'JSON evidence') {
+  const parsed = parseJsonWithoutExceptions.noExceptions(bytes);
+  if (parsed === undefined) throw new Error(`Invalid ${label}`);
+  return parsed;
+}
+
+async function readJson(path) {
+  return parseJson(await readFile(path, 'utf8'));
+}
+
+function validateBaselineMetadata(baselineBytes) {
+  const metadata = parseJson(readFileSync(metadataPath, 'utf8'));
+  if (metadata.revision !== baselineRevision || metadata.scannerVersion !== scannerVersion || metadata.baselineSha256 !== hash(baselineBytes)) throw new Error('Pinned baseline provenance validation failed');
+  if (metadata.configSha256 !== hash(readFileSync(configPath))) throw new Error('Scanner configuration differs from pinned baseline');
+}
+
+function validateScannerVersion() {
+  const result = spawnSync('npm', ['run', 'rigour', '--', '--version'], { cwd: root, encoding: 'utf8', timeout: commandTimeout });
+  if (result.error || result.status !== 0 || !result.stdout.trim().endsWith(scannerVersion)) throw new Error('Rigour scanner version mismatch');
+}
+
+async function validateScannerDependencyUse() {
+  const packageJson = await readJson(resolve(root, 'package.json'));
+  if (packageJson.scripts.rigour !== 'rigour' || !packageJson.devDependencies?.['@rigour-labs/cli']) {
+    throw new Error('Pinned Rigour CLI must be installed as a development dependency and invoked by the rigour script');
+  }
+}
+
+function validatePinnedEvidence() {
+  const baselineBytes = readFileSync(baselinePath);
+  validateBaselineMetadata(baselineBytes);
+  validateScannerVersion();
+  return validateReport(parseJson(baselineBytes, 'pinned baseline report'), { allowProtected: true });
+}
+
+async function validateInputSet() {
+  const touched = (await candidateChangedFiles()).filter((file) => !ignoredWorkspacePaths.has(file));
+  if (touched.some((file) => !inputFiles.has(file) && !removedBaselinePaths.has(file))) throw new Error('Candidate scanner inputs differ from the pinned clean-baseline input set');
+  if (touched.includes('rigour.yml')) throw new Error('Scanner configuration changed; independent review is required');
+}
+
+async function removePreviousReport() {
+  await Promise.all([reportPath, resolve(root, 'rigour-fix-packet.json')].map((path) => rm(path, { force: true })));
+}
+
+async function runScan() {
+  await removePreviousReport();
+  const result = spawnSync('npm', ['run', 'rigour', '--', 'check', '--ci', '--json', '--no-cache'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: commandTimeout,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  return result.status;
+}
+
+function verifyScanExit(report, exitCode) {
+  if ((report.status === 'PASS' && exitCode !== 0) || (report.status === 'FAIL' && exitCode === 0)) throw new Error('Raw Rigour report and exit status disagree');
+}
+
+function reportOutcome(baseline, report, changedPaths) {
+  const introduced = compareReports(baseline, report, changedPaths);
+  if (introduced.length) {
+    const protectedCount = introduced.filter(protectedFinding).length;
+    const implementationCount = introduced.length - protectedCount;
+    process.stderr.write(`Qualification findings: ${implementationCount} new or worsened, ${protectedCount} protected or review-boundary findings\n`);
+    process.stderr.write('Qualification: FAIL (new or worsened findings require repair; protected findings require independent exact-head maintainer review)\n');
+    process.exitCode = 1;
+    return;
+  }
+  if (baseline.status === 'FAIL' && report.status === 'FAIL') {
+    process.stdout.write('Qualification: PASS (no new or worsened findings; raw Rigour remains FAIL)\n');
+    return;
+  }
+  process.stdout.write('Qualification: PASS (no new or worsened findings; raw Rigour remains unchanged)\n');
+}
+
+async function runQualification() {
+  await validateScannerDependencyUse();
+  const baseline = validatePinnedEvidence();
+  await validateInputSet();
+  const exitCode = await runScan();
+  const rawBytes = await readFile(reportPath);
+  const rawReport = validateReport(parseJson(rawBytes), { allowProtected: true });
+  verifyScanExit(rawReport, exitCode);
+  process.stdout.write(`Raw Rigour: ${rawReport.status} (${rawReport.failures.length} findings)\n`);
+  process.stdout.write(`Raw report SHA-256: ${hash(rawBytes)}\n`);
+  process.stdout.write(`Finding fingerprints SHA-256: ${hash(rawReport.failures.map(findingFingerprint).join('\n'))}\n`);
+  const changedPaths = new Set((await candidateChangedFiles()).filter(candidateOwnsInput));
+  reportOutcome(baseline, removeGeneratedArtifacts(structuredClone(rawReport)), changedPaths);
+}
+
+function main() {
+  runQualification().catch(reportQualificationFailure);
+}
+
+function reportQualificationFailure(error) {
+  process.stderr.write(`Qualification: FAIL closed (${error.message})\n`);
+  process.exitCode = 1;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}
+
+export { compareReports, parseJson, removeGeneratedArtifacts, validateReport };
