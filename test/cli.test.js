@@ -15,6 +15,8 @@ test('parseArgs recognizes flags and type', () => {
 });
 
 test('parseArgs records explicit discovery source flags', () => {
+  const plan = parseArgs(['plan', '--json']);
+  assert.equal(plan.planMode, true);
   const database = parseArgs(['discover', '--database', '0123456789abcdef0123456789abcdef']);
   const dataSource = parseArgs(['discover', '--data-source', 'source-id']);
   assert.equal(database.databaseFlagProvided, true);
@@ -76,6 +78,9 @@ test('discover entrypoint never persists explicit tokens or changes local state'
       ['discover', '--token', 'invalid-token'],
       ['discover', '--json', '--token', 'invalid-token'],
       ['discover', '--database', 'db', '--data-source', 'source', '--token', 'invalid-token'],
+      ['plan', '--token', 'invalid-token'],
+      ['plan', '--json', '--token', 'invalid-token'],
+      ['plan', '--database', 'db', '--data-source', 'source', '--token', 'invalid-token'],
     ]) {
       const result = spawnSync(process.execPath, ['--import', fetchStub, cli, ...args], {
         cwd,
@@ -93,6 +98,36 @@ test('discover entrypoint never persists explicit tokens or changes local state'
   } finally {
     fs.rmSync(parent, { recursive: true, force: true });
   }
+});
+
+test('plan entrypoint performs production-client discovery without mutating repository state', () => {
+  const cli = path.resolve('bin/cli.js');
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'notiondrive-plan-entry-'));
+  const cwd = path.join(parent, 'repo');
+  const home = path.join(parent, 'home');
+  fs.mkdirSync(cwd);
+  fs.mkdirSync(home);
+  fs.mkdirSync(path.join(cwd, 'docs'));
+  fs.writeFileSync(path.join(cwd, 'notiondrive.config.json'), JSON.stringify({ discovery: { databaseId: '0123456789abcdef0123456789abcdef' } }));
+  fs.writeFileSync(path.join(cwd, '.notiondrive-state.json'), '{"ledger":"unchanged"}');
+  fs.writeFileSync(path.join(cwd, 'docs', 'existing.md'), 'unchanged');
+  const git = (args) => spawnSync('git', args, { cwd, encoding: 'utf8' });
+  assert.equal(git(['init', '-q']).status, 0);
+  assert.equal(git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'fixture']).status, 0);
+  const initial = fs.readdirSync(cwd).sort().map((name) => [name, fs.statSync(path.join(cwd, name)).isFile() ? fs.readFileSync(path.join(cwd, name), 'utf8') : null]);
+  const fetchStub = path.join(parent, 'fetch-stub.js');
+  fs.writeFileSync(fetchStub, `const Module = require('node:module');\nconst originalLoad = Module._load;\nModule._load = function(request, parent, isMain) {\n  if (request === 'node-fetch') { const fetch = async (input) => {\n  const url = String(input);\n  if (url.endsWith('/v1/search')) return new Response(JSON.stringify({ results: [], has_more: false, next_cursor: null }), { status: 200 });\n  if (url.includes('/databases/') && url.endsWith('/query')) return new Response(JSON.stringify({ results: [\n    { id: '01234567-89ab-cdef-0123-456789abcdef', last_edited_time: '2026-01-01T00:00:00.000Z', properties: { Name: { type: 'title', title: [{ plain_text: 'existing.md' }] }, 'Repository Directory': { type: 'select', select: { id: 'dir', name: 'docs' } } } },\n    { id: '11234567-89ab-cdef-0123-456789abcdef', last_edited_time: '2026-01-01T00:00:00.000Z', properties: { Name: { type: 'title', title: [{ plain_text: 'review.md' }] }, 'Repository Directory': { type: 'select', select: null } } }\n  ], has_more: false, next_cursor: null }), { status: 200 });\n  if (url.includes('/blocks/') && url.includes('/children')) return new Response(JSON.stringify({ results: [], has_more: false, next_cursor: null }), { status: 200 });\n  return new Response(JSON.stringify({ object: 'error', message: 'unexpected request' }), { status: 404 });\n  };\n  fetch.default = fetch;\n  return fetch; }\n  return originalLoad.call(this, request, parent, isMain);\n};\n`);
+  try {
+    const result = spawnSync(process.execPath, ['--require', fetchStub, cli, 'plan', '--json'], { cwd, encoding: 'utf8', env: { ...process.env, HOME: home, NOTION_TOKEN: 'fixture-token', NO_COLOR: '1' } });
+    assert.notEqual(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal(output.error, undefined, result.stdout);
+    assert.equal(output.summary.total, 2);
+    assert.equal(output.documents.find((row) => row.pageId === '0123456789abcdef0123456789abcdef').path, 'docs/existing.md');
+    assert.equal(output.documents.find((row) => row.pageId === '1123456789abcdef0123456789abcdef').classification, 'REQUIRES_REVIEW');
+    assert.equal(fs.existsSync(path.join(home, '.notiondrive', 'config.json')), false);
+    assert.deepEqual(fs.readdirSync(cwd).sort().map((name) => [name, fs.statSync(path.join(cwd, name)).isFile() ? fs.readFileSync(path.join(cwd, name), 'utf8') : null]), initial);
+  } finally { fs.rmSync(parent, { recursive: true, force: true }); }
 });
 
 test('getHeadlessExitCode fails when stats contain errors', () => {

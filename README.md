@@ -38,3 +38,7 @@ Configure a `discovery` object in `notiondrive.config.json` to inventory databas
 ```
 
 Run `notiondrive discover --json` for deterministic JSON, or `notiondrive discover --database <id> --out <repository-root>` for a human-readable inventory. Configure exactly one of `databaseId` or `dataSourceId`. Invalid or ambiguous records are reported as requiring review; discovery never synchronizes documents.
+
+### Read-only reconciliation planning
+
+Run `notiondrive plan --json` (or `notiondrive plan` for a concise human inventory) to compare discovered pages with repository files, Git status, and the existing synchronization ledger. It does not apply changes. Missing files are reported, never restored automatically. `IN_SYNC` requires both a recorded local-content hash and a remote revision baseline; absent or incomplete ledger evidence is classified `UNTRACKED`. `POSSIBLE_MOVE` and `POSSIBLE_ARCHIVE` are review signals only and do not assert content equivalence. A nonzero exit indicates incomplete or review-required evidence; use the report to identify records for manual investigation before any separate approved operation.

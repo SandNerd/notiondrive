@@ -7,9 +7,11 @@ import { NotionClient } from './notion.js';
 import { extractTitle, extractDatabaseTitle } from './notion-helpers.js';
 import { loadConfig, loadProjectConfig, saveConfig, flattenManifest } from './config.js';
 import { getSaveLocationOptions, isWritablePath, safeMerge } from './utils.js';
+import { loadStateLedger } from './state.js';
 import { downloadPages } from './download.js';
 import { executeSyncMode, startSyncWatchMode, executeStatus } from './sync.js';
 import { discoverDocuments } from './discovery.js';
+import { createPlan } from './planner.js';
 import { realpath } from 'node:fs/promises';
 
 /** Exit cleanly if the user cancels a prompt. */
@@ -237,6 +239,7 @@ export function parseArgs(argv) {
     watchMode: false,
     statusMode: false,
     discoverMode: false,
+    planMode: false,
     statusFilter: null,
     databaseId: null,
     dataSourceId: null,
@@ -260,6 +263,8 @@ export function parseArgs(argv) {
     const a = argv[i];
     if (a === 'discover') {
       out.discoverMode = true;
+    } else if (a === 'plan') {
+      out.planMode = true;
     } else if (a === '--database') {
       out.databaseFlagProvided = true;
       out.databaseId = extractNotionId(argv[i + 1]);
@@ -474,6 +479,36 @@ export function loadLocalManifest() {
   }
 }
 
+async function runPlan(args, projectConfig, savedConfig, envToken) {
+  try {
+    const discoveryConfig = projectConfig?.discovery || savedConfig?.discovery || {};
+    const source = resolveDiscoverySource(args, discoveryConfig);
+    const token = args.token || envToken || projectConfig?.token || savedConfig?.token || null;
+    if (source.error || !token) throw new Error(source.error || 'Planning requires exactly one databaseId/dataSourceId and a configured Notion token.');
+    const root = await realpath(path.resolve(args.out || process.cwd()));
+    const notion = new NotionClient(token);
+    const discoveries = await discoverDocuments({ notion, ...source, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
+    const plan = await createPlan({ discoveries, root, ledgerLoader: async () => loadStateLedger(), fetchRemoteBlocks: async (pageId) => {
+      const result = await notion.getBlockChildrenDeep(pageId);
+      if (result.warnings?.length) throw new Error('Notion returned incomplete page content');
+      return result.blocks;
+    } });
+    if (args.jsonOutput) console.log(JSON.stringify(plan, null, 2));
+    else {
+      console.log(`Repository ${plan.repository.identity} @ ${plan.repository.revision}`);
+      console.log(`${plan.summary.total} documents`);
+      for (const row of plan.documents) console.log(`${row.classification}\t${row.pageId || '(missing ID)'}\t${row.path || row.reason}`);
+      console.log(JSON.stringify(plan.summary.classifications));
+    }
+    process.exitCode = Object.keys(plan.summary.classifications).some((key) => ['REQUIRES_REVIEW', 'CONFLICT', 'MISSING_LOCAL', 'UNTRACKED', 'PATH_CHANGED', 'POSSIBLE_MOVE', 'POSSIBLE_ARCHIVE'].includes(key)) ? 1 : 0;
+  } catch (err) {
+    const message = `Planning failed: ${err.message}`;
+    if (args.jsonOutput) console.log(JSON.stringify({ error: message }));
+    else p.log.error(message);
+    process.exitCode = 1;
+  }
+}
+
 async function runDiscovery(args, projectConfig, savedConfig, envToken) {
   const jsonOutput = args.jsonOutput;
   try {
@@ -510,6 +545,7 @@ export async function main(envToken = null) {
       '  sync                  Run batch download from notiondrive.config.json or ~/.notiondrive/config.json',
       '  status                Show sync status for manifest targets (supports name or group filtering)',
       '  discover              Read-only database document inventory (--database <id> or --data-source <id> [--json])',
+      '  plan                  Read-only Notion/Git reconciliation plan (--database <id> or --data-source <id> [--json])',
       '                        Project-local notiondrive.config.json takes precedence and can also provide token/defaultOutputDir',
       '                        You can limit which targets are processed by passing a positional filter',
       '                        after `sync` or by using the `--group` / `-g` flag.',
@@ -561,14 +597,15 @@ export async function main(envToken = null) {
   // Enable debug mode early so other modules can check env var
   if (args.debug) {
     process.env.DEBUG = '1';
-    if (!(args.discoverMode && args.jsonOutput)) p.log.info('Debug logging enabled (DEBUG=1)');
+    if (!(args.jsonOutput && (args.discoverMode || args.planMode))) p.log.info('Debug logging enabled (DEBUG=1)');
   }
   // Discovery is read-only: do not validate-and-save an explicit token or enter sync flows.
-  if (args.discoverMode) {
+  if (args.discoverMode || args.planMode) {
     try {
       const projectConfig = await loadProjectConfig();
       const savedConfig = await loadConfig();
-      await runDiscovery(args, projectConfig, savedConfig, envToken);
+      if (args.planMode) await runPlan(args, projectConfig, savedConfig, envToken);
+      else await runDiscovery(args, projectConfig, savedConfig, envToken);
     } catch (err) {
       const message = `Discovery failed: ${err.message}`;
       if (args.jsonOutput) console.log(JSON.stringify({ error: message }));

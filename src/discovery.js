@@ -157,5 +157,7 @@ export async function discoverDocuments({ notion, databaseId, dataSourceId, prop
       const first = destinations.get(key); first.path = null; first.status = 'requires_review'; first.reason = 'duplicate output path';
     } else destinations.set(key, result);
   }
+  Object.defineProperty(results, 'source', { value: { type: dataSourceId ? 'data_source' : 'database', id: dataSourceId || databaseId }, enumerable: false });
+  Object.defineProperty(results, 'pages', { value: pages, enumerable: false });
   return results;
 }
