@@ -34,13 +34,20 @@ function parseGitStatus(status) {
   return paths;
 }
 
+function normalizeLedgerPath(value) {
+  if (typeof value !== 'string' || !value || value.includes('\\0')) return null;
+  const normalized = value.replace(/\\/g, '/');
+  if (normalized.startsWith('/') || /^[a-z]:/i.test(normalized) || normalized.split('/').some((part) => !part || part === '.' || part === '..')) return null;
+  return normalized;
+}
+
 function ledgerRecords(ledger, pageId) {
   const canonicalId = canonicalPageId(pageId);
   const matchingEntries = Object.entries(ledger?.byNotionId || {}).filter(([id]) => canonicalPageId(id) === canonicalId);
   if (matchingEntries.length > 1) return [{ path: null, record: null }, { path: null, record: null }];
   const entry = matchingEntries[0]?.[1];
   if (!entry || typeof entry !== 'object' || !entry.outputs || typeof entry.outputs !== 'object') return [];
-  return Object.entries(entry.outputs).map(([relPath, record]) => ({ path: relPath, record: record || {} }));
+  return Object.entries(entry.outputs).map(([relPath, record]) => ({ path: normalizeLedgerPath(relPath), record: record || {} }));
 }
 
 async function fileSnapshot(root, relativePath) {
@@ -81,12 +88,15 @@ function classify({ discovery, prior, file, remoteRevision, remote, gitEvidence 
   if (prior.length > 1) return ['REQUIRES_REVIEW', 'multiple ledger paths or page identities exist for this Notion page'];
   const baseline = prior[0]?.record;
   const lastPath = prior[0]?.path || null;
+  if (prior.length && prior.some((item) => !item.path)) return ['REQUIRES_REVIEW', 'ledger contains an unsafe or ambiguous repository path'];
+  if (discovery.status !== 'mapped' || !discovery.path) return ['REQUIRES_REVIEW', discovery.reason || 'discovery metadata is ambiguous or incomplete'];
   if (lastPath && lastPath !== discovery.path) return ['PATH_CHANGED', 'Notion-derived path differs from the tracked ledger path; restructuring or a move requires review, and content equivalence is not inferred'];
   if (gitEvidence === 'deleted') return ['POSSIBLE_ARCHIVE', 'tracked path is deleted in Git; restoration is not inferred'];
   if (gitEvidence === 'renamed') return ['POSSIBLE_MOVE', 'Git reports a rename involving the tracked path; content equivalence is not inferred'];
   if (file.error) return ['REQUIRES_REVIEW', `local file cannot be safely inspected: ${file.error}`];
   if (!trustedBaseline(baseline)) return ['UNTRACKED', 'no trustworthy shared synchronization baseline is available'];
   if (!file.exists) return ['MISSING_LOCAL', 'expected local file is absent; no restoration is proposed'];
+  if (remote?.renderingInputsUnverified) return ['REQUIRES_REVIEW', 'configured frontmatter inputs are not represented in the synchronized baseline'];
   if (!remoteRevision) return ['REQUIRES_REVIEW', 'remote revision is unavailable; synchronization state cannot be established'];
   const localChanged = file.hash !== baseline.last_synced_local_hash;
   const baselineFingerprint = baseline.last_synced_content_fingerprint;
@@ -99,7 +109,7 @@ function classify({ discovery, prior, file, remoteRevision, remote, gitEvidence 
   return ['IN_SYNC', 'local and remote content fingerprints match their synchronized baselines'];
 }
 
-export async function createPlan({ discoveries, root = process.cwd(), ledgerLoader = loadStateLedger, gitRunner = runGit, remotePages = discoveries?.pages || [], fetchRemoteBlocks = null }) {
+export async function createPlan({ discoveries, root = process.cwd(), ledgerLoader = loadStateLedger, gitRunner = runGit, remotePages = discoveries?.pages || [], fetchRemoteBlocks = null, frontmatter = false }) {
   const resolvedRoot = await realpath(root);
   const ledger = await ledgerLoader();
   const revision = gitRunner(resolvedRoot, ['rev-parse', 'HEAD']);
@@ -113,6 +123,9 @@ export async function createPlan({ discoveries, root = process.cwd(), ledgerLoad
     const lastPath = prior.length === 1 ? prior[0].path : null;
     const localPath = discovery.path || lastPath;
     const file = await fileSnapshot(resolvedRoot, localPath);
+    if (localPath && !normalizeLedgerPath(localPath) && localPath !== discovery.path) {
+      file.error = 'ledger path is absolute, ambiguous, or escapes the repository';
+    }
     const canonicalId = canonicalPageId(pageId);
     const matchingPages = canonicalId ? remotePages.filter((page) => canonicalPageId(page?.id) === canonicalId) : [];
     const remote = matchingPages.length === 1 ? matchingPages[0] : null;
@@ -131,7 +144,7 @@ export async function createPlan({ discoveries, root = process.cwd(), ledgerLoad
     const trackedEvidence = (lastPath && changedPaths.get(lastPath)) || null;
     const gitEvidence = trackedEvidence || (discovery.path && changedPaths.get(discovery.path)) || null;
     const repositoryEvidence = gitEvidence || null;
-    const remoteForClassification = remote ? { ...remote, content_fingerprint: remoteFingerprint } : null;
+    const remoteForClassification = remote ? { ...remote, content_fingerprint: remoteFingerprint, renderingInputsUnverified: Boolean(frontmatter) } : null;
     const [classification, reason] = matchingPages.length > 1
       ? ['REQUIRES_REVIEW', 'multiple remote records share this page identity']
       : remoteContentError

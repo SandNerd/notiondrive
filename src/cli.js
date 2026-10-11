@@ -488,7 +488,10 @@ async function runPlan(args, projectConfig, savedConfig, envToken) {
     const root = await realpath(path.resolve(args.out || process.cwd()));
     const notion = new NotionClient(token);
     const discoveries = await discoverDocuments({ notion, ...source, root, properties: discoveryConfig.properties, overrides: discoveryConfig.overrides || [] });
-    const plan = await createPlan({ discoveries, root, ledgerLoader: async () => loadStateLedger(), fetchRemoteBlocks: async (pageId) => {
+    const configuredTargets = [...(projectConfig?.targets || []), ...(savedConfig?.targets || [])];
+    const frontmatter = projectConfig?.discovery?.frontmatter ?? savedConfig?.discovery?.frontmatter
+      ?? configuredTargets.some((target) => target?.frontmatter === true || typeof target?.frontmatter === 'string' && target.frontmatter.length > 0);
+    const plan = await createPlan({ discoveries, root, ledgerLoader: async () => loadStateLedger(), frontmatter, fetchRemoteBlocks: async (pageId) => {
       const result = await notion.getBlockChildrenDeep(pageId);
       if (result.warnings?.length) throw new Error('Notion returned incomplete page content');
       return result.blocks;

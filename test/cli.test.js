@@ -115,11 +115,12 @@ test('plan entrypoint performs production-client discovery without mutating repo
   assert.equal(git(['init', '-q']).status, 0);
   assert.equal(git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'fixture']).status, 0);
   const initial = fs.readdirSync(cwd).sort().map((name) => [name, fs.statSync(path.join(cwd, name)).isFile() ? fs.readFileSync(path.join(cwd, name), 'utf8') : null]);
-  const fetchStub = path.join(parent, 'fetch-stub.js');
+  const fetchStub = path.join(parent, 'fetch-stub.cjs');
   fs.writeFileSync(fetchStub, `const Module = require('node:module');\nconst originalLoad = Module._load;\nModule._load = function(request, parent, isMain) {\n  if (request === 'node-fetch') { const fetch = async (input) => {\n  const url = String(input);\n  if (url.endsWith('/v1/search')) return new Response(JSON.stringify({ results: [], has_more: false, next_cursor: null }), { status: 200 });\n  if (url.includes('/databases/') && url.endsWith('/query')) return new Response(JSON.stringify({ results: [\n    { id: '01234567-89ab-cdef-0123-456789abcdef', last_edited_time: '2026-01-01T00:00:00.000Z', properties: { Name: { type: 'title', title: [{ plain_text: 'existing.md' }] }, 'Repository Directory': { type: 'select', select: { id: 'dir', name: 'docs' } } } },\n    { id: '11234567-89ab-cdef-0123-456789abcdef', last_edited_time: '2026-01-01T00:00:00.000Z', properties: { Name: { type: 'title', title: [{ plain_text: 'review.md' }] }, 'Repository Directory': { type: 'select', select: null } } }\n  ], has_more: false, next_cursor: null }), { status: 200 });\n  if (url.includes('/blocks/') && url.includes('/children')) return new Response(JSON.stringify({ results: [], has_more: false, next_cursor: null }), { status: 200 });\n  return new Response(JSON.stringify({ object: 'error', message: 'unexpected request' }), { status: 404 });\n  };\n  fetch.default = fetch;\n  return fetch; }\n  return originalLoad.call(this, request, parent, isMain);\n};\n`);
   try {
-    const result = spawnSync(process.execPath, ['--require', fetchStub, cli, 'plan', '--json'], { cwd, encoding: 'utf8', env: { ...process.env, HOME: home, NOTION_TOKEN: 'fixture-token', NO_COLOR: '1' } });
+    const result = spawnSync(process.execPath, ['--require', fetchStub, cli, 'plan', '--json'], { cwd, encoding: 'utf8', env: { ...process.env, HOME: home, NOTIONDRIVE_STATE_FILE: path.join(parent, 'state.json'), NOTION_TOKEN: 'fixture-token', NO_COLOR: '1' } });
     assert.notEqual(result.status, 0, result.stderr);
+    assert.notEqual(result.stdout.trim(), '', `Expected plan JSON; stderr: ${result.stderr}`);
     const output = JSON.parse(result.stdout);
     assert.equal(output.error, undefined, result.stdout);
     assert.equal(output.summary.total, 2);

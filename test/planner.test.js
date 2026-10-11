@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rename, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { createPlan } from '../src/planner.js';
 
 async function git(root, ...args) {
@@ -24,6 +25,49 @@ async function fixture(run) {
     await git(root, 'commit', '-qm', 'fixture');
     await run(root);
   } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+test('actual sync ledger shape remains untracked and normalized Windows paths do not become false path changes', async () => {
+  await fixture(async (root) => {
+    const pageId = '90fabd95-e170-82e8-a49f-818c1160f390';
+    const actualSyncRecord = {
+      byNotionId: { [pageId]: { notion_id: pageId, outputs: { 'docs\\a.md': {
+        last_synced_remote_mtime: '2024-01-01T00:00:00.000Z',
+        last_synced_local_hash: cryptoHash('stable'),
+        hasSyncedBlocks: true,
+        dependencies: [],
+      } } } },
+      byPath: { 'docs\\a.md': pageId },
+    };
+    const plan = await createPlan({ root, ledgerLoader: async () => actualSyncRecord, discoveries: [{ pageId, title: 'A', path: 'docs/a.md', status: 'mapped' }], remotePages: [{ id: pageId, last_edited_time: '2024-01-01T00:00:00.000Z', properties: { Status: { type: 'select', select: { name: 'Active' } } } }] });
+    assert.equal(plan.documents[0].lastSyncedPath, 'docs/a.md');
+    assert.equal(plan.documents[0].classification, 'UNTRACKED');
+  });
+});
+
+test('invalid ledger paths require review instead of appearing as path changes', async () => {
+  await fixture(async (root) => {
+    const pageId = '90fabd95-e170-82e8-a49f-818c1160f390';
+    for (const ledgerPath of ['../outside.md', '/outside.md', 'docs/./a.md', 'docs//a.md']) {
+      const ledger = { byNotionId: { [pageId]: { outputs: { [ledgerPath]: { last_synced_local_hash: cryptoHash('stable'), last_synced_remote_mtime: 'old' } } } } };
+      const plan = await createPlan({ root, ledgerLoader: async () => ledger, discoveries: [{ pageId, title: 'A', path: 'docs/a.md', status: 'mapped' }] });
+      assert.equal(plan.documents[0].classification, 'REQUIRES_REVIEW', ledgerPath);
+    }
+  });
+});
+
+test('configured frontmatter properties are conservatively reviewed without a rendered baseline', async () => {
+  await fixture(async (root) => {
+    const pageId = '90fabd95-e170-82e8-a49f-818c1160f390';
+    const baseline = { byNotionId: { [pageId]: { outputs: { 'docs/a.md': { last_synced_local_hash: cryptoHash('stable'), last_synced_remote_mtime: 'old', last_synced_content_fingerprint: '1'.repeat(64) } } } } };
+    const page = { id: pageId, last_edited_time: 'old', content_fingerprint: '1'.repeat(64), properties: { Status: { type: 'select', select: { name: 'Changed' } } } };
+    const plan = await createPlan({ root, ledgerLoader: async () => baseline, discoveries: [{ pageId, title: 'A', path: 'docs/a.md', status: 'mapped' }], remotePages: [page], frontmatter: true });
+    assert.equal(plan.documents[0].classification, 'REQUIRES_REVIEW');
+  });
+});
+
+function cryptoHash(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
 }
 
 test('reports unknown baseline rather than inferring synchronization from timestamps', async () => {
