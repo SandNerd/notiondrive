@@ -71,8 +71,24 @@ test('discover entrypoint never persists explicit tokens or changes local state'
   });
   const initialFiles = before(cwd);
   const configPath = path.join(home, '.notiondrive', 'config.json');
-  const fetchStub = path.join(parent, 'fetch-stub.js');
-  fs.writeFileSync(fetchStub, `globalThis.fetch = async () => new Response('{"object":"error","message":"unauthorized"}', { status: 401 });\n`);
+  const fetchStub = path.join(parent, 'fetch-stub.cjs');
+  fs.writeFileSync(fetchStub, `const Module = require('node:module');
+const originalLoad = Module._load;
+Module._load = function(request, parentModule, isMain) {
+  if (request === 'node-fetch') {
+    const fetch = async () => ({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+      headers: {},
+      text: async () => JSON.stringify({ object: 'error', status: 401, code: 'unauthorized', message: 'API token is invalid' }),
+    });
+    fetch.default = fetch;
+    return fetch;
+  }
+  return originalLoad.call(this, request, parentModule, isMain);
+};
+`);
   try {
     for (const args of [
       ['discover', '--token', 'invalid-token'],
@@ -82,7 +98,7 @@ test('discover entrypoint never persists explicit tokens or changes local state'
       ['plan', '--json', '--token', 'invalid-token'],
       ['plan', '--database', 'db', '--data-source', 'source', '--token', 'invalid-token'],
     ]) {
-      const result = spawnSync(process.execPath, ['--import', fetchStub, cli, ...args], {
+      const result = spawnSync(process.execPath, ['--require', fetchStub, cli, ...args], {
         cwd,
         encoding: 'utf8',
         env: { ...process.env, HOME: home, NOTION_TOKEN: '', NO_COLOR: '1' },

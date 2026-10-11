@@ -111,51 +111,60 @@ async function updateNotionTitle(notion, pageId, title) {
   });
 }
 
-async function prepareUploadContent({ notion, pageId, target, localContent, localOutputPath }) {
-  let uploadContent = stripLeadingFrontmatter(
-    await applyFrontmatterTarget(notion, pageId, target, localContent)
-  );
+function hasExplicitTitle(target) {
+  return target?.title === 'filename' || target?.title === 'relativePath';
+}
 
-  if (target?.title === 'filename' || target?.title === 'relativePath') {
-    const desiredTitle = target.title === 'relativePath'
-      ? (target.relativePath || target.filename || path.basename(localOutputPath))
-      : (target.filename || path.basename(localOutputPath));
-    const oldCloudTitle = extractTitle(await notion.getPage(pageId));
-    const parsedFrontmatter = target.frontmatter && typeof target.frontmatter === 'string'
-      ? extractLeadingFrontmatter(localContent)
-      : null;
-    const extracted = parsedFrontmatter?.raw
-      ? extractFrontmatterKeyValue(parsedFrontmatter.raw, target.frontmatter)
-      : null;
-    const skipDemotion = extracted != null && String(oldCloudTitle) === String(extracted);
-    const demotionHeader = `# ${oldCloudTitle}`;
-    const hasDemotionHeader = uploadContent.split('\n').some((line) => line.trim() === demotionHeader);
+function shouldDemoteCloudTitle({ oldTitle, desiredTitle, target, localContent, uploadContent }) {
+  if (!oldTitle || oldTitle === desiredTitle) return false;
+  const demotionHeader = `# ${oldTitle}`;
+  if (uploadContent.split('\n').some((line) => line.trim() === demotionHeader)) return false;
+  if (typeof target.frontmatter !== 'string') return true;
 
-    if (oldCloudTitle && oldCloudTitle !== desiredTitle && !hasDemotionHeader && !skipDemotion) {
-      uploadContent = `${demotionHeader}\n\n${uploadContent}`;
-    }
-    if (oldCloudTitle !== desiredTitle) {
-      await updateNotionTitle(notion, pageId, desiredTitle);
-    }
-    return uploadContent;
+  const frontmatter = extractLeadingFrontmatter(localContent);
+  const value = frontmatter?.raw
+    ? extractFrontmatterKeyValue(frontmatter.raw, target.frontmatter)
+    : null;
+  return value == null || String(oldTitle) !== String(value);
+}
+
+async function prepareExplicitTitleContent({ notion, pageId, target, localContent, localOutputPath, uploadContent }) {
+  const desiredTitle = target.title === 'relativePath'
+    ? (target.relativePath || target.filename || path.basename(localOutputPath))
+    : (target.filename || path.basename(localOutputPath));
+  const oldTitle = extractTitle(await notion.getPage(pageId));
+
+  if (shouldDemoteCloudTitle({ oldTitle, desiredTitle, target, localContent, uploadContent })) {
+    uploadContent = `# ${oldTitle}\n\n${uploadContent}`;
   }
+  if (oldTitle !== desiredTitle) await updateNotionTitle(notion, pageId, desiredTitle);
+  return uploadContent;
+}
 
-  const bodyLines = uploadContent.split('\n');
-  const firstContentLine = bodyLines.findIndex((line) => line.trim());
-  if (firstContentLine < 0 || !bodyLines[firstContentLine].trim().startsWith('# ')) {
-    return uploadContent;
-  }
+async function prepareH1TitleContent({ notion, pageId, uploadContent }) {
+  const lines = uploadContent.split('\n');
+  const headingIndex = lines.findIndex((line) => line.trim());
+  if (headingIndex < 0 || !lines[headingIndex].trim().startsWith('# ')) return uploadContent;
 
-  const extractedTitle = bodyLines[firstContentLine].trim().slice(2).trim();
-  const page = await notion.getPage(pageId);
-  if (extractTitle(page) !== extractedTitle) {
+  const extractedTitle = lines[headingIndex].trim().slice(2).trim();
+  if (extractTitle(await notion.getPage(pageId)) !== extractedTitle) {
     await updateNotionTitle(notion, pageId, extractedTitle);
   }
-  return bodyLines.filter((_, index) => index !== firstContentLine).join('\n');
+  return lines.filter((_, index) => index !== headingIndex).join('\n');
+}
+
+async function prepareUploadContent({ notion, pageId, target, localContent, localOutputPath }) {
+  const uploadContent = stripLeadingFrontmatter(
+    await applyFrontmatterTarget(notion, pageId, target, localContent)
+  );
+  const options = { notion, pageId, target, localContent, localOutputPath, uploadContent };
+  return hasExplicitTitle(target)
+    ? prepareExplicitTitleContent(options)
+    : prepareH1TitleContent(options);
 }
 
 async function saveLedgerBaseline(ledger, pageId, relKey, record, saveStateLedgerFn) {
-  const updatedLedger = JSON.parse(JSON.stringify(ledger || { byNotionId: {}, byPath: {} }));
+  const updatedLedger = structuredClone(ledger || { byNotionId: {}, byPath: {} });
   updatedLedger.byNotionId = updatedLedger.byNotionId || {};
   updatedLedger.byPath = updatedLedger.byPath || {};
   updatedLedger.byNotionId[pageId] = updatedLedger.byNotionId[pageId] || { notion_id: pageId, outputs: {} };
