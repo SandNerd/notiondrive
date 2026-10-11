@@ -92,6 +92,16 @@ test('invalid ledger paths require review instead of appearing as path changes',
   });
 });
 
+test('normalizes Windows-style ledger paths before path comparison and Git evidence lookup', async () => {
+  await fixture(async (root) => {
+    const pageId = '90fabd95-e170-82e8-a49f-818c1160f390';
+    const baseline = { byNotionId: { [pageId]: { outputs: { 'docs\\a.md': { last_synced_local_hash: cryptoHash('stable'), last_synced_remote_mtime: 'old' } } } } };
+    const plan = await createPlan({ root, ledgerLoader: async () => baseline, discoveries: [{ pageId, title: 'A', path: 'docs/a.md', status: 'mapped' }], remotePages: [{ id: pageId, last_edited_time: 'old' }] });
+    assert.equal(plan.documents[0].lastSyncedPath, 'docs/a.md');
+    assert.equal(plan.documents[0].classification, 'UNTRACKED');
+  });
+});
+
 test('configured frontmatter properties are conservatively reviewed without a rendered baseline', async () => {
   await fixture(async (root) => {
     const pageId = '90fabd95-e170-82e8-a49f-818c1160f390';
