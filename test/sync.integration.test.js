@@ -190,6 +190,7 @@ test('upload-only targets skip when local hash matches ledger', async () => {
       async getPage(id) {
         return { id, last_edited_time: '2025-01-01T00:00:00.000Z' };
       }
+      async getBlockChildren() { return []; }
       async clearPageContent() {
         clearCalled = true;
         return 0;
@@ -234,10 +235,14 @@ test('upload-only targets overwrite Notion when local hash changes', async () =>
     let downloadCalled = false;
 
     class MockNotion {
+      constructor() {
+        this.client = { pages: { update: async () => {} } };
+      }
       async validateToken() {}
       async getPage(id) {
         return { id, last_edited_time: '2025-01-01T00:00:00.000Z' };
       }
+      async getBlockChildren() { return []; }
       async clearPageContent() {
         clearCalled = true;
         return 0;
@@ -278,7 +283,7 @@ test('push uploads strip frontmatter from body when frontmatter is defaulted off
     const pageId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     const rel = 'frontmatter.md';
     const mdPath = path.join(dir, rel);
-    const source = `---\ntitle: Example\ncategory: docs\n---\n# Body\n`;
+    const source = `---\ntitle: Example\ncategory: docs\n---\n# Body\n\nContent\n`;
     await writeFile(mdPath, source, 'utf8');
 
     const ledger = {
@@ -292,7 +297,14 @@ test('push uploads strip frontmatter from body when frontmatter is defaulted off
         this.client = { pages: { update: async () => { throw new Error('should not update properties'); } } };
       }
       async validateToken() {}
-      async getPage(id) { return { id, last_edited_time: '2026-01-01T00:00:00.000Z' }; }
+      async getPage(id) {
+        return {
+          id,
+          last_edited_time: '2026-01-01T00:00:00.000Z',
+          properties: { title: { type: 'title', title: [{ plain_text: 'Body' }] } },
+        };
+      }
+      async getBlockChildren() { return []; }
       async clearPageContent() { return 0; }
       async appendPageContent(_pageId, blocks) { appendCalls.push(blocks); return blocks.length; }
     }
@@ -302,8 +314,8 @@ test('push uploads strip frontmatter from body when frontmatter is defaulted off
 
     assert.ok(result.completedTargets.some((t) => t.pushed === true), 'should push the updated file');
     assert.equal(appendCalls.length, 1, 'should append blocks once');
-    assert.equal(appendCalls[0][0].type, 'heading_1');
-    assert.equal(appendCalls[0][0].heading_1.rich_text[0].text.content, 'Body');
+    assert.equal(appendCalls[0][0].type, 'paragraph');
+    assert.equal(appendCalls[0][0].paragraph.rich_text[0].text.content, 'Content');
     assert.equal(JSON.stringify(appendCalls[0]).includes('title: Example'), false, 'frontmatter should not be present in uploaded blocks');
   } finally {
     process.chdir(originalCwd);
@@ -336,6 +348,7 @@ test('push uploads inject frontmatter into configured database property and stri
       }
       async validateToken() {}
       async getPage(id) { return { id, last_edited_time: '2026-01-01T00:00:00.000Z' }; }
+      async getBlockChildren() { return []; }
       async clearPageContent() { return 0; }
       async appendPageContent(_pageId, blocks) { appendCalls.push(blocks); return blocks.length; }
     }
@@ -383,6 +396,7 @@ test('push uploads injects only matching YAML key value into property', async ()
       async getPage(id) {
         return { id, last_edited_time: '2026-01-01T00:00:00.000Z' };
       }
+      async getBlockChildren() { return []; }
       async clearPageContent() { return 0; }
       async appendPageContent(_pageId, blocks) { appendCalls.push(blocks); return blocks.length; }
     }
@@ -410,6 +424,8 @@ test('two-way sync pushes to Notion and returns completedTargets', async () => {
   const notion = {
     validateToken: async () => {},
     getPage: (pageId) => Promise.resolve({ id: pageId, last_edited_time: '2026-05-28T10:00:00.000Z', properties: {} }),
+    getBlockChildren: async () => [],
+    client: { pages: { update: async () => {} } },
     clearPageContent: async () => 0,
     appendPageContent: async (_pageId, blocks) => blocks.length,
   };
@@ -540,6 +556,8 @@ test('two-way sync local-wins conflicts overwrite Notion', async () => {
   const notion = {
     validateToken: async () => {},
     getPage: (pageId) => Promise.resolve({ id: pageId, last_edited_time: '2026-05-28T11:00:00.000Z', properties: {} }),
+    getBlockChildren: async () => [],
+    client: { pages: { update: async () => {} } },
     clearPageContent: async () => 0,
     appendPageContent: async () => 1,
   };
@@ -788,6 +806,7 @@ test('pushing markdown with H1 at the top updates Notion title and strips H1 fro
           properties: { title: { type: 'title', title: [{ plain_text: 'Old Title' }] } }
         }; 
       }
+      async getBlockChildren() { return []; }
       async clearPageContent() { return 0; }
       async appendPageContent(id, blocks) { 
         bodyBlocks = blocks; 
@@ -945,6 +964,7 @@ test('H1 extraction works correctly with frontmatter: true', async () => {
           properties: { title: { type: 'title', title: [{ plain_text: 'Old Title' }] } }
         }; 
       }
+      async getBlockChildren() { return []; }
       async clearPageContent() { return 0; }
       async appendPageContent(id, blocks) { 
         bodyBlocks = blocks; 

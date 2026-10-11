@@ -24,6 +24,8 @@ test('two-way sync pushes to Notion and returns completedTargets', async () => {
   const notion = {
     validateToken: async () => {},
     getPage: (pageId) => Promise.resolve({ id: pageId, last_edited_time: '2026-05-28T10:00:00.000Z', properties: {} }),
+    getBlockChildren: async () => [],
+    client: { pages: { update: async () => {} } },
     clearPageContent: async () => 0,
     appendPageContent: async (_pageId, blocks) => blocks.length,
   };

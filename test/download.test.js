@@ -184,7 +184,9 @@ test('downloadPages supports string-based frontmatter from properties', async ()
       createNoopHooks(),
       { format: 'markdown-tree', frontmatter: 'empty_prop' }
     );
-    const contentEmpty = await readFile(path.join(outDir, 'empty-fm.md'), 'utf8');
+    assert.deepEqual(statsEmpty.errors, []);
+    assert.equal(statsEmpty.writtenFiles.length, 1);
+    const contentEmpty = await readFile(statsEmpty.writtenFiles[0], 'utf8');
     assert.ok(!contentEmpty.includes('---'), 'Should not contain frontmatter block for empty property');
 
     // 3. Test boolean true still works
