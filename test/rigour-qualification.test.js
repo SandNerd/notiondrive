@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { candidateChangedFiles, candidateOwnsInput, classifyQualification, compareReports, parseJson, protectedPathChanges, removeGeneratedArtifacts, validateReport } from '../scripts/rigour-qualification.js';
+
+
+const repository = resolve(fileURLToPath(new URL('..', import.meta.url)));
+
+const exec = (cwd, ...args) => {
+  const result = spawnSync(args[0], args.slice(1), { cwd, encoding: 'utf8' });
+  assert.equal(result.status, 0, `${args.join(' ')} failed: ${result.stderr}`);
+  return result.stdout.trim();
+};
 
 const finding = (overrides = {}) => ({ id: 'AST_COMPLEXITY', title: "Function 'example' has cyclomatic complexity of 12", severity: 'medium', provenance: 'traditional', files: ['src/example.js'], ...overrides });
 const report = (failures = []) => ({ status: 'FAIL', summary: { 'ast-analysis': 'FAIL' }, failures, stats: { score: failures.length ? 80 : 44, duration_ms: 1, severity_breakdown: {}, provenance_breakdown: {} } });
@@ -12,6 +25,52 @@ test('ordinary tracked source and test paths are eligible for scanner and compar
   assert.equal(candidateOwnsInput('src/sync.js'), true);
   assert.equal(candidateOwnsInput('test/new-case.test.js'), true);
   assert.equal(candidateOwnsInput('.not2-evidence/rigour-candidate-81f4fa4.json'), false);
+});
+
+test('actual qualification entrypoint scans ordinary tracked source changes with raw FAIL preserved', async () => {
+  const temp = await mkdtemp(join(repository, '.not2-evidence', 'qualification-fixture-'));
+  try {
+    await rm(temp, { recursive: true, force: true });
+    exec(repository, 'git', 'worktree', 'add', '--quiet', '--detach', temp, '81f4fa4293c3cc0234ed0586bdf945c3f0d00f7a');
+    exec(temp, 'git', 'switch', '--quiet', '-c', `qualification-fixture-${process.pid}`);
+    exec(temp, 'git', 'config', '--replace-all', 'core.excludesfile', '/dev/null');
+    const candidateFiles = [
+      'AGENTS.md', 'NOT-2-DECISION.md', '.gitignore', 'package.json', 'package-lock.json', 'rigour.yml',
+      '.github/workflows/ci.yml', '.not2-evidence/rigour-main-81f4fa4.json', '.not2-evidence/rigour-main-81f4fa4.json.metadata.json',
+      '.not2-evidence/rigour-candidate-81f4fa4.json', '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json',
+      'scripts/rigour-qualification.js', 'scripts/rigour-error-aggregate.js', 'test/rigour-qualification.test.js', 'src/error.js',
+    ];
+    for (const path of candidateFiles) {
+      const destination = join(temp, path);
+      await mkdir(join(destination, '..'), { recursive: true });
+      await writeFile(destination, await readFile(join(repository, path)));
+    }
+    exec(temp, 'git', 'add', '.');
+    exec(temp, 'git', 'commit', '-qm', 'Prepare ordinary source qualification fixture');
+    exec(temp, 'git', 'config', 'user.email', 'test@example.invalid');
+    exec(temp, 'git', 'config', 'user.name', 'Qualification test');
+    await writeFile(join(temp, '.gitignore'), `${await readFile(join(temp, '.gitignore'), 'utf8')}\nnode_modules/\n/node_modules\n`);
+    exec(temp, 'git', 'add', '.gitignore');
+    exec(temp, 'git', 'commit', '-qm', 'Ignore linked test dependencies');
+    await symlink(join(repository, 'node_modules'), join(temp, 'node_modules'));
+    await writeFile(join(temp, 'src/error.js'), `${await readFile(join(temp, 'src/error.js'), 'utf8')}\n`);
+    exec(temp, 'git', 'add', 'src/error.js');
+    exec(temp, 'git', 'commit', '-qm', 'Change ordinary source input');
+    exec(temp, 'git', 'branch', `fixture-${process.pid}`, '81f4fa4293c3cc0234ed0586bdf945c3f0d00f7a');
+    const result = spawnSync(process.execPath, ['scripts/rigour-qualification.js'], { cwd: temp, encoding: 'utf8', timeout: 120_000, env: { ...process.env, PATH: `${join(repository, 'node_modules/.bin')}:${process.env.PATH}`, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.excludesfile', GIT_CONFIG_VALUE_0: '/dev/null' } });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /Raw Rigour: FAIL \(\d+ findings\)/);
+    assert.match(result.stdout, /Qualification: ADVISORY/);
+    assert.match(result.stdout, /raw Rigour remains FAIL/);
+    const metadata = JSON.parse(await readFile(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json'), 'utf8'));
+    assert.equal(metadata.rawVerdict, 'FAIL');
+    assert.equal(metadata.revision, exec(temp, 'git', 'rev-parse', 'HEAD'));
+  } finally {
+    if (exec(repository, 'git', 'worktree', 'list', '--porcelain').includes(`worktree ${temp}\n`)) {
+      exec(repository, 'git', 'worktree', 'remove', '--force', temp);
+    }
+    await rm(temp, { recursive: true, force: true });
+  }
 });
 
 test('changed protected workflow paths require review even without a raw scanner finding', async () => {
