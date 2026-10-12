@@ -52,10 +52,10 @@ test('actual qualification entrypoint scans ordinary tracked source changes with
         if (path !== '.not2-evidence/rigour-candidate-81f4fa4.json' && path !== '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json') throw error;
       }
     }
-    exec(temp, 'git', 'add', '.');
-    exec(temp, 'git', 'commit', '-qm', 'Prepare ordinary source qualification fixture');
     exec(temp, 'git', 'config', 'user.email', 'test@example.invalid');
     exec(temp, 'git', 'config', 'user.name', 'Qualification test');
+    exec(temp, 'git', 'add', '.');
+    exec(temp, 'git', 'commit', '-qm', 'Prepare ordinary source qualification fixture');
     await writeFile(join(temp, '.gitignore'), `${await readFile(join(temp, '.gitignore'), 'utf8')}\nnode_modules/\n/node_modules\n`);
     exec(temp, 'git', 'add', '.gitignore');
     exec(temp, 'git', 'commit', '-qm', 'Ignore linked test dependencies');
