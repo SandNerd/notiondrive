@@ -32,6 +32,8 @@ test('actual qualification entrypoint scans ordinary tracked source changes with
   try {
     await rm(temp, { recursive: true, force: true });
     await mkdir(join(repository, '.not2-evidence'), { recursive: true });
+    await rm(join(repository, '.not2-evidence/rigour-candidate-81f4fa4.json'), { force: true });
+    await rm(join(repository, '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json'), { force: true });
     exec(repository, 'git', 'worktree', 'add', '--quiet', '--detach', temp, '81f4fa4293c3cc0234ed0586bdf945c3f0d00f7a');
     exec(temp, 'git', 'switch', '--quiet', '-c', `qualification-fixture-${process.pid}`);
     exec(temp, 'git', 'config', '--replace-all', 'core.excludesfile', '/dev/null');
@@ -44,7 +46,11 @@ test('actual qualification entrypoint scans ordinary tracked source changes with
     for (const path of candidateFiles) {
       const destination = join(temp, path);
       await mkdir(join(destination, '..'), { recursive: true });
-      await writeFile(destination, await readFile(join(repository, path)));
+      try {
+        await writeFile(destination, await readFile(join(repository, path)));
+      } catch (error) {
+        if (path !== '.not2-evidence/rigour-candidate-81f4fa4.json' && path !== '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json') throw error;
+      }
     }
     exec(temp, 'git', 'add', '.');
     exec(temp, 'git', 'commit', '-qm', 'Prepare ordinary source qualification fixture');
@@ -63,6 +69,7 @@ test('actual qualification entrypoint scans ordinary tracked source changes with
     assert.match(result.stdout, /Raw Rigour: FAIL \(\d+ findings\)/);
     assert.match(result.stdout, /Qualification: ADVISORY/);
     assert.match(result.stdout, /raw Rigour remains FAIL/);
+    const evidencePath = join(repository, '.not2-evidence');
     const metadata = JSON.parse(await readFile(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json'), 'utf8'));
     assert.equal(metadata.rawVerdict, 'FAIL');
     assert.equal(metadata.revision, exec(temp, 'git', 'rev-parse', 'HEAD'));
