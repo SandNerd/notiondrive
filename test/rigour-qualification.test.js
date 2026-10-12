@@ -28,9 +28,10 @@ test('ordinary tracked source and test paths are eligible for scanner and compar
 });
 
 test('actual qualification entrypoint scans ordinary tracked source changes with raw FAIL preserved', async () => {
-  const temp = await mkdtemp(join(repository, '.not2-evidence', 'qualification-fixture-'));
+  const temp = join(repository, '.not2-evidence', `qualification-fixture-${process.pid}`);
   try {
     await rm(temp, { recursive: true, force: true });
+    await mkdir(join(repository, '.not2-evidence'), { recursive: true });
     exec(repository, 'git', 'worktree', 'add', '--quiet', '--detach', temp, '81f4fa4293c3cc0234ed0586bdf945c3f0d00f7a');
     exec(temp, 'git', 'switch', '--quiet', '-c', `qualification-fixture-${process.pid}`);
     exec(temp, 'git', 'config', '--replace-all', 'core.excludesfile', '/dev/null');
