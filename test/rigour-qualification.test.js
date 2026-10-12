@@ -82,6 +82,13 @@ test('actual qualification entrypoint handles tracked path lifecycle with raw FA
     assert.equal(metadata.rawVerdict, 'FAIL');
     assert.equal(metadata.revision, exec(temp, 'git', 'rev-parse', 'HEAD'));
     assert.equal(JSON.parse(await readFile(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json'), 'utf8')).status, 'FAIL');
+    await rm(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json'), { force: true });
+    await rm(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json'), { force: true });
+    await writeFile(join(temp, 'src/cli.js'), 'export const untrackedResurrection = true;\n');
+    const rejected = spawnSync(process.execPath, ['scripts/rigour-qualification.js'], { cwd: temp, encoding: 'utf8', timeout: 120_000, env: { ...process.env, PATH: `${join(repository, 'node_modules/.bin')}:${process.env.PATH}`, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.excludesfile', GIT_CONFIG_VALUE_0: '/dev/null' } });
+    assert.equal(rejected.status, 1);
+    assert.match(`${rejected.stdout}\n${rejected.stderr}`, /Candidate scanner inputs include an untracked path/);
+    await assert.rejects(readFile(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json')));
   } finally {
     if (exec(repository, 'git', 'worktree', 'list', '--porcelain').includes(`worktree ${temp}\n`)) {
       exec(repository, 'git', 'worktree', 'remove', '--force', temp);

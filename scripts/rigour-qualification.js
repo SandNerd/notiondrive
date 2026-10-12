@@ -277,7 +277,8 @@ async function validateInputSet() {
   const candidateTracked = new Set(runCommand('git', ['ls-files', '-z']).split('\0').filter(Boolean));
   const baselineTracked = new Set(runCommand('git', ['ls-tree', '-r', '--name-only', '-z', baselineRevision]).split('\0').filter(Boolean));
   const candidateInputs = touched.filter((file) => !qualificationFiles.has(file) && !transientEvidencePath(file) && !localCandidateEvidence.test(file));
-  if (candidateInputs.some((file) => !candidateTracked.has(file) && !baselineTracked.has(file))) throw new Error('Candidate scanner inputs include an untracked path');
+  const untrackedWorkspace = runCommand('git', ['ls-files', '--others', '--exclude-standard', '-z']).split('\0').filter(Boolean);
+  if (candidateInputs.some((file) => untrackedWorkspace.includes(file) || (!candidateTracked.has(file) && !baselineTracked.has(file)))) throw new Error('Candidate scanner inputs include an untracked path');
   const head = runCommand('git', ['rev-parse', 'HEAD']).trim();
   const baselineInHistory = spawnSync('git', ['merge-base', '--is-ancestor', baselineRevision, head], { cwd: root }).status === 0;
   const workflowPath = resolve(root, '.github/workflows/ci.yml');
