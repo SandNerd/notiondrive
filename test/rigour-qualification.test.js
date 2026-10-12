@@ -108,6 +108,18 @@ test('error-handling attribution changes fail closed with unchanged strategy cou
   const baseline = finding({ id: 'inconsistent-error-handling', title: 'Inconsistent Error Handling', provenance: 'ai-drift', line: 33, details, files: ['src/a.js', 'src/b.js'] });
   const movedMembership = { ...baseline, details: details.replace('src/b.js', 'src/c.js'), files: ['src/a.js', 'src/c.js'] };
   assert.deepEqual(compareReports(report([baseline]), report([movedMembership])), [movedMembership]);
+  const reorderedPaths = { ...baseline, details: details.replace('src/a.js, src/b.js', 'src/b.js, src/a.js') };
+  assert.deepEqual(compareReports(report([baseline]), report([reorderedPaths])), []);
+});
+
+test('complete scanner aggregates may list only some members when file attribution is unchanged', () => {
+  const details = "Inconsistent error handling for 'try-catch': 4 different strategies found across 16 files:\n  • other (169x): scripts/a.js, scripts/b.js, scripts/c.js\n  • log (1x): scripts/d.js\n  • rethrow (5x): src/a.js, src/b.js\n  • return-error (7x): src/c.js, src/d.js";
+  const files = ['scripts/a.js', 'scripts/b.js', 'scripts/c.js', 'scripts/d.js', 'src/a.js'];
+  const baseline = finding({ id: 'inconsistent-error-handling', title: 'Inconsistent Error Handling', severity: 'high', provenance: 'ai-drift', line: 33, details, files });
+  const unchanged = { ...baseline, files: ['src/a.js', 'scripts/d.js', 'scripts/a.js', 'src/c.js', 'scripts/b.js'] };
+  assert.deepEqual(compareReports(report([baseline]), report([unchanged])), []);
+  const changedStrategyMembership = { ...unchanged, details: details.replace('scripts/d.js', 'scripts/e.js') };
+  assert.deepEqual(compareReports(report([baseline]), report([changedStrategyMembership])), [changedStrategyMembership]);
 });
 
 test('malformed or incomplete error-handling attribution fails closed', () => {

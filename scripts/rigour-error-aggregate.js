@@ -5,13 +5,19 @@ function strategyCounts(details) {
     .map((match) => ({ strategy: match[1], count: Number(match[2]), files: match[3].split(', ').map((path) => path.trim()) }));
   const declaredFiles = Number(details.match(/across\s+(\d+)\s+files?/i)?.[1]);
   const attributedFiles = new Set(strategies.flatMap(({ files }) => files)).size;
-  return { strategies, counts: new Map(strategies.map(({ strategy, count }) => [strategy, count])), attributionComplete: Number.isInteger(declaredFiles) && declaredFiles === attributedFiles };
+  const attributionValid = Number.isInteger(declaredFiles) && declaredFiles >= attributedFiles;
+  const uniqueStrategies = new Set(strategies.map(({ strategy }) => strategy));
+  const counts = new Map(strategies.map(({ strategy, count }) => [strategy, count]));
+  return { strategies, counts, attributionValid: attributionValid && uniqueStrategies.size === strategies.length };
 }
 
 function attributionChanged(baseline, candidate) {
-  if (!baseline.strategies.length || !candidate.strategies.length || !baseline.attributionComplete || !candidate.attributionComplete || baseline.strategies.some(({ files }) => !files.length) || candidate.strategies.some(({ files }) => !files.length)) return true;
-  const previous = new Map(baseline.strategies.map(({ strategy, files }) => [strategy, files.join('\\0')]));
-  return candidate.strategies.some(({ strategy, files }) => previous.get(strategy) !== files.join('\\0'));
+  if (!baseline.strategies.length || !candidate.strategies.length || !baseline.attributionValid || !candidate.attributionValid || baseline.strategies.some(({ files }) => !files.length) || candidate.strategies.some(({ files }) => !files.length)) return true;
+  const filesByStrategy = (strategies) => new Map(strategies.map(({ strategy, files }) => [strategy, [...files].sort()]));
+  const previous = filesByStrategy(baseline.strategies);
+  const current = filesByStrategy(candidate.strategies);
+  return [...previous].some(([strategy, files]) => JSON.stringify(files) !== JSON.stringify(current.get(strategy)))
+    || [...current.keys()].some((strategy) => !previous.has(strategy));
 }
 
 function aggregateShapeChanged(previous, current, baseline, candidate) {
