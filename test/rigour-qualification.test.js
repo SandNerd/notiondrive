@@ -65,6 +65,7 @@ test('actual qualification entrypoint scans ordinary tracked source changes with
     const metadata = JSON.parse(await readFile(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json'), 'utf8'));
     assert.equal(metadata.rawVerdict, 'FAIL');
     assert.equal(metadata.revision, exec(temp, 'git', 'rev-parse', 'HEAD'));
+    assert.equal(JSON.parse(await readFile(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json'), 'utf8')).status, 'FAIL');
   } finally {
     if (exec(repository, 'git', 'worktree', 'list', '--porcelain').includes(`worktree ${temp}\n`)) {
       exec(repository, 'git', 'worktree', 'remove', '--force', temp);
