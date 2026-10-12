@@ -13,7 +13,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const baselinePath = resolve(root, '.not2-evidence/rigour-main-81f4fa4.json');
 const metadataPath = resolve(root, '.not2-evidence/rigour-main-81f4fa4.json.metadata.json');
 const reportPath = resolve(root, 'rigour-report.json');
-const inputFiles = new Set(['AGENTS.md', '.github/workflows/ci.yml', 'package.json', 'package-lock.json', 'NOT-2-DECISION.md', 'scripts/rigour-qualification.js', 'scripts/rigour-error-aggregate.js', 'test/rigour-qualification.test.js', '.not2-evidence/rigour-main-81f4fa4.json', '.not2-evidence/rigour-main-81f4fa4.json.metadata.json', '.not2-evidence/rigour-candidate-81f4fa4.json', '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json', 'rigour-report.json', 'rigour-fix-packet.json']);
+const qualificationFiles = new Set(['.not2-evidence/rigour-main-81f4fa4.json', '.not2-evidence/rigour-main-81f4fa4.json.metadata.json', '.not2-evidence/rigour-candidate-81f4fa4.json', '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json', 'rigour-report.json', 'rigour-fix-packet.json']);
+const localCandidateEvidence = /^\.not2-evidence\/rigour-candidate(?:-local(?:-check)?)?(?:-[a-f0-9]+)?\.(?:json|stderr)(?:\.metadata\.json)?$/;
 const ignoredWorkspacePaths = new Set(['.serena/.gitignore', '.serena/project.yml', '.not2-evidence/rigour-candidate-local.json', '.not2-evidence/rigour-candidate-local.stderr', '.not2-evidence/rigour-candidate-local-check.json', '.not2-evidence/rigour-candidate-local-check.stderr']);
 const transientEvidencePath = (path) => /^\.not2-evidence\/hosted-[^/]+\/(?:rigour-qualification-evidence|rigour-report)\/\.not2-evidence\/rigour-(?:main|candidate)-[a-f0-9]+\.json(?:\.metadata\.json)?$/.test(path) || /^\.not2-evidence\/hosted-[^/]+\/rigour-qualification-evidence\/rigour-main-[a-f0-9]+\.json(?:\.metadata\.json)?$/.test(path);
 const removedBaselinePaths = new Set(['scripts/check-manifest-collisions.cjs', 'scripts/disable-duplicate-targets.cjs']);
@@ -32,9 +33,9 @@ function runCommand(command, args) {
   return result.stdout;
 }
 
-function candidateChangedFiles() {
+export function candidateChangedFiles() {
   const paths = [];
-  const diffPaths = runCommand('git', ['diff', '--name-only', '-z', `${baselineRevision}...HEAD`]);
+  const diffPaths = runCommand('git', ['diff', '--name-only', '--no-renames', '-z', `${baselineRevision}...HEAD`]);
   paths.push(...diffPaths.split('\0').filter(Boolean));
   const statusPaths = runCommand('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   const entries = statusPaths.split('\0').filter(Boolean);
@@ -115,8 +116,8 @@ function removeGeneratedArtifacts(report) {
   return report;
 }
 
-function candidateOwnsInput(path) {
-  return inputFiles.has(path) || ignoredWorkspacePaths.has(path);
+export function candidateOwnsInput(path) {
+  return !qualificationFiles.has(path) && !localCandidateEvidence.test(path) && !transientEvidencePath(path);
 }
 
 function candidateInputSet(report) {
@@ -270,8 +271,12 @@ function validatePinnedEvidence() {
 
 async function validateInputSet() {
   const touched = (await candidateChangedFiles()).filter((file) => !ignoredWorkspacePaths.has(file));
-  if (touched.some((file) => !inputFiles.has(file) && !removedBaselinePaths.has(file) && !transientEvidencePath(file) && !/^\.not2-evidence\/rigour-candidate-local(?:-check)?\.(?:json|stderr)$/.test(file))) throw new Error('Candidate scanner inputs differ from the pinned clean-baseline input set');
+  const evidenceChanged = touched.some((file) => qualificationFiles.has(file) && !localCandidateEvidence.test(file) && !transientEvidencePath(file) && !file.startsWith('.not2-evidence/rigour-main-'));
+  if (evidenceChanged) throw new Error('Candidate scanner inputs overlap qualification evidence; independent review is required');
   if (touched.includes('rigour.yml')) throw new Error('Scanner configuration changed; independent review is required');
+  const tracked = new Set(runCommand('git', ['ls-files', '-z']).split('\0').filter(Boolean));
+  const candidateInputs = touched.filter((file) => !qualificationFiles.has(file) && !transientEvidencePath(file) && !localCandidateEvidence.test(file));
+  if (candidateInputs.some((file) => !tracked.has(file) && !removedBaselinePaths.has(file))) throw new Error('Candidate scanner inputs include an untracked path');
   const head = runCommand('git', ['rev-parse', 'HEAD']).trim();
   const baselineInHistory = spawnSync('git', ['merge-base', '--is-ancestor', baselineRevision, head], { cwd: root }).status === 0;
   const workflowPath = resolve(root, '.github/workflows/ci.yml');

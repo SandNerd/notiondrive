@@ -1,9 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyQualification, compareReports, parseJson, protectedPathChanges, removeGeneratedArtifacts, validateReport } from '../scripts/rigour-qualification.js';
+import { candidateChangedFiles, candidateOwnsInput, classifyQualification, compareReports, parseJson, protectedPathChanges, removeGeneratedArtifacts, validateReport } from '../scripts/rigour-qualification.js';
 
 const finding = (overrides = {}) => ({ id: 'AST_COMPLEXITY', title: "Function 'example' has cyclomatic complexity of 12", severity: 'medium', provenance: 'traditional', files: ['src/example.js'], ...overrides });
 const report = (failures = []) => ({ status: 'FAIL', summary: { 'ast-analysis': 'FAIL' }, failures, stats: { score: failures.length ? 80 : 44, duration_ms: 1, severity_breakdown: {}, provenance_breakdown: {} } });
+
+test('ordinary tracked source and test paths are eligible for scanner and comparison', () => {
+  const paths = new Set(candidateChangedFiles());
+  assert.ok(paths.has('test/rigour-qualification.test.js'));
+  assert.ok(paths.has('scripts/rigour-qualification.js'));
+  assert.equal(candidateOwnsInput('src/sync.js'), true);
+  assert.equal(candidateOwnsInput('test/new-case.test.js'), true);
+  assert.equal(candidateOwnsInput('.not2-evidence/rigour-candidate-81f4fa4.json'), false);
+});
 
 test('changed protected workflow paths require review even without a raw scanner finding', async () => {
   assert.deepEqual(protectedPathChanges(new Set(['.github/workflows/ci.yml'])), ['.github/workflows/ci.yml']);
