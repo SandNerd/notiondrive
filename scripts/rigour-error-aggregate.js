@@ -1,9 +1,17 @@
 export const errorHandlingAggregate = (finding) => finding.id === 'inconsistent-error-handling';
 
 function strategyCounts(details) {
-  const strategies = [...details.matchAll(/^\s*•\s+([^\s]+)\s+\((\d+)x\):/gm)]
-    .map((match) => ({ strategy: match[1], count: Number(match[2]) }));
-  return { strategies, counts: new Map(strategies.map(({ strategy, count }) => [strategy, count])) };
+  const strategies = [...details.matchAll(/^\s*•\s+([^\s]+)\s+\((\d+)x\):\s*(.+)$/gm)]
+    .map((match) => ({ strategy: match[1], count: Number(match[2]), files: match[3].split(', ').map((path) => path.trim()) }));
+  const declaredFiles = Number(details.match(/across\s+(\d+)\s+files?/i)?.[1]);
+  const attributedFiles = new Set(strategies.flatMap(({ files }) => files)).size;
+  return { strategies, counts: new Map(strategies.map(({ strategy, count }) => [strategy, count])), attributionComplete: Number.isInteger(declaredFiles) && declaredFiles === attributedFiles };
+}
+
+function attributionChanged(baseline, candidate) {
+  if (!baseline.strategies.length || !candidate.strategies.length || !baseline.attributionComplete || !candidate.attributionComplete || baseline.strategies.some(({ files }) => !files.length) || candidate.strategies.some(({ files }) => !files.length)) return true;
+  const previous = new Map(baseline.strategies.map(({ strategy, files }) => [strategy, files.join('\\0')]));
+  return candidate.strategies.some(({ strategy, files }) => previous.get(strategy) !== files.join('\\0'));
 }
 
 function aggregateShapeChanged(previous, current, baseline, candidate) {
@@ -18,7 +26,7 @@ export function compareErrorHandlingAggregate(current, baseline, changedPaths, n
   if (!previous) return current;
   const oldCounts = strategyCounts(previous.details);
   const newCounts = strategyCounts(current.details);
-  if (aggregateShapeChanged(previous, current, oldCounts, newCounts)) return current;
+  if (aggregateShapeChanged(previous, current, oldCounts, newCounts) || attributionChanged(oldCounts, newCounts)) return current;
   const candidatePaths = normalizedPaths(current);
   const affectedPaths = candidatePaths.filter((path) => changedPaths.has(path));
   const baselinePaths = new Set(normalizedPaths(previous));

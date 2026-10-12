@@ -98,9 +98,24 @@ test('same-count error-handling file relocation is a regression through qualific
 });
 
 test('error-handling aggregate strategy counts are mapped by name rather than report order', () => {
-  const baseline = finding({ id: 'inconsistent-error-handling', title: 'Inconsistent Error Handling', provenance: 'ai-drift', line: 33, details: "Inconsistent error handling: 2 strategies\n  • other (169x): scripts/a.js\n  • log (1x): scripts/b.js", files: ['scripts/a.js', 'scripts/b.js'] });
-  const reordered = { ...baseline, details: `Inconsistent error handling: 2 strategies\n  • log (1x): scripts/b.js\n  • other (169x): scripts/a.js` };
+  const baseline = finding({ id: 'inconsistent-error-handling', title: 'Inconsistent Error Handling', provenance: 'ai-drift', line: 33, details: "Inconsistent error handling for try-catch: 2 different strategies found across 2 files\n  • other (169x): scripts/a.js\n  • log (1x): scripts/b.js", files: ['scripts/a.js', 'scripts/b.js'] });
+  const reordered = { ...baseline, details: `Inconsistent error handling for try-catch: 2 different strategies found across 2 files\n  • log (1x): scripts/b.js\n  • other (169x): scripts/a.js` };
   assert.deepEqual(compareReports(report([baseline]), report([reordered])), []);
+});
+
+test('error-handling attribution changes fail closed with unchanged strategy counts', () => {
+  const details = "Inconsistent error handling for 'try-catch': 2 different strategies found across 2 files:\n  • log (1x): src/a.js\n  • rethrow (1x): src/b.js";
+  const baseline = finding({ id: 'inconsistent-error-handling', title: 'Inconsistent Error Handling', provenance: 'ai-drift', line: 33, details, files: ['src/a.js', 'src/b.js'] });
+  const movedMembership = { ...baseline, details: details.replace('src/b.js', 'src/c.js'), files: ['src/a.js', 'src/c.js'] };
+  assert.deepEqual(compareReports(report([baseline]), report([movedMembership])), [movedMembership]);
+});
+
+test('malformed or incomplete error-handling attribution fails closed', () => {
+  const baseline = finding({ id: 'inconsistent-error-handling', title: 'Inconsistent Error Handling', provenance: 'ai-drift', line: 33, details: 'Inconsistent error handling for try-catch: 1 different strategies found across 1 files\n  • log (1x): src/a.js', files: ['src/a.js'] });
+  const malformed = { ...baseline, details: 'Inconsistent error handling for try-catch: 1 different strategies found across 1 files\n  • log (1x):' };
+  const missingCandidateStrategy = { ...baseline, details: 'Inconsistent error handling: 1 strategy' };
+  assert.deepEqual(compareReports(report([baseline]), report([malformed])), [malformed]);
+  assert.deepEqual(compareReports(report([baseline]), report([missingCandidateStrategy])), [missingCandidateStrategy]);
 });
 
 test('duplicate error-handling strategies fail closed instead of overwriting counts', () => {
