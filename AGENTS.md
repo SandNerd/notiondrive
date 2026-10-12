@@ -3,9 +3,13 @@
 This project uses Rigour for quality gates. If Rigour MCP tools are available, they are self-describing — use them. Otherwise use the CLI:
 
 ```bash
-npx @rigour-labs/cli check   # Run quality gates (must PASS before task is done)
+npx @rigour-labs/cli check   # Preserve and report the raw scanner verdict
 npx @rigour-labs/cli explain # Explain failures
 ```
+
+## Rigour qualification policy
+
+The raw Rigour verdict is authoritative as a scanner result and must always be reported unchanged. A separate advisory comparison may identify unchanged inherited findings against the maintainer-pinned baseline; it does not turn a raw FAIL into PASS or waive findings. New, worsened, relocated, renamed, or ambiguous findings fail the comparison. Security, secrets, data-loss, protected-path, and behavioral/safety acceptance failures are never automatically excused. Baseline evidence, scanner version/configuration, and complete reports must be validated; invalid or mismatched evidence fails closed. Baselines are advanced only by explicit maintainer review, never automatically or by candidate-authored qualification code. The bootstrap qualification is advisory only until independently reviewed at the exact PR head and integrated. `npm test` and independent safety review remain mandatory. Changes to qualification scripts, CI, repository instructions, or protected files require independent exact-head maintainer review; they cannot certify or excuse themselves.
 
 # Rigour: Engineering Governance
 

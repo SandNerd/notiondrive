@@ -1,0 +1,14 @@
+{
+  "revision": "81f4fa4293c3cc0234ed0586bdf945c3f0d00f7a",
+  "scanner": "@rigour-labs/cli",
+  "scannerVersion": "7.0.2",
+  "node": "v24.20.0",
+  "npm": "11.19.0",
+  "input": "git archive of exact revision; clean extracted directory; no dependencies installed in archive",
+  "command": "rigour check --ci --json --no-cache",
+  "rawVerdict": "FAIL",
+  "findings": 37,
+  "score": 44,
+  "baselineSha256": "3b0f4d7213a7cf2b0ec6f599cff00e40e87a371074c3954194f1fb5b5d11c24c",
+  "configSha256": "c40e464c8ff6070f63899a62244cbba5881be0ba218b8ef829ac7f989d7f91b2"
+}
