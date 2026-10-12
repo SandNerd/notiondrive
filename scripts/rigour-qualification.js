@@ -114,8 +114,7 @@ function findingSignature(finding) {
 function aggregatedFinding(finding) {
   return finding.id === 'file-size';
 }
-const lineCount=(finding,path)=>+finding.files.find(file=>file.startsWith(`${path} (`))?.match(/\((\d+) lines\)$/)?.[1]||0;
-
+const lineCount = (finding, path) => Number(finding.files.find((file) => file.startsWith(`${path} (`))?.match(/\((\d+) lines\)$/)?.[1] ?? 0);
 function compareErrorHandlingAggregate(current, baseline, unmatched, changedPaths) {
   const previous = baseline.failures.find(errorHandlingAggregate);
   if (!previous) return current;
@@ -191,7 +190,7 @@ function findBaselineMatch(current, baseline, unmatched) {
 
 function rejectAmbiguousRename(current, baseline, unmatched) {
   const possible = baseline.some((finding) => unmatched.has(finding) && finding.id === current.id && finding.provenance === current.provenance);
-  if (possible && !metric(current.title)) throw new Error('Baseline finding identity changed; comparison is ambiguous and requires maintainer review');
+  if (possible && !metric(current.title)) throw new Error('Baseline finding identity is ambiguous; maintainer review is required');
 }
 
 function processFinding(current, baseline, unmatched, changedPaths) {
@@ -207,7 +206,8 @@ function processFinding(current, baseline, unmatched, changedPaths) {
   if (!aggregatedFinding(current)) return isWorsened(current, previous) ? current : null;
   const candidatePaths = normalizedPaths(current);
   const previousPaths = normalizedPaths(previous);
-  const introducedPaths = candidatePaths.filter((path) => !previousPaths.includes(path) || (!baselineInputSet(baseline).has(path) && candidateOwnsInput(path)));
+  const baselinePaths = baselineInputSet(baseline);
+  const introducedPaths = candidatePaths.filter((path) => !previousPaths.includes(path) || (candidateOwnsInput(path) && !baselinePaths.has(path)));
   const worsenedPaths = candidatePaths.filter((path) => candidateOwnsInput(path) && changedPaths.has(path) && lineCount(current, path) > lineCount(previous, path));
   const affectedPaths = [...new Set([...introducedPaths, ...worsenedPaths])];
   return affectedPaths.length ? { ...current, files: affectedPaths } : null;
@@ -341,8 +341,13 @@ function verifyScanExit(report, exitCode) {
   if ((report.status === 'PASS' && exitCode !== 0) || (report.status === 'FAIL' && exitCode === 0)) throw new Error('Raw Rigour report and exit status disagree');
 }
 
+export function protectedPathChanges(paths) {
+  return [...paths].filter((path) => path === '.github/workflows/ci.yml');
+}
 function reportOutcome(baseline, report, changedPaths) {
-  const introduced = compareReports(baseline, report, changedPaths);
+  const protectedChanges = protectedPathChanges(changedPaths);
+  const introduced = compareReports(baseline, withoutCandidateOwnedFiles(report, changedPaths), changedPaths).filter((finding) => !protectedFinding(finding) && !protectedChanges.includes(finding.files[0]));
+  introduced.push(...protectedChanges.map((path) => ({ id: 'protected-path-change', title: 'Protected workflow requires independent review', severity: 'high', provenance: 'governance', files: [path] })));
   if (introduced.length) {
     const protectedCount = introduced.filter(protectedFinding).length;
     const implementationCount = introduced.length - protectedCount;
@@ -379,7 +384,6 @@ async function runQualification() {
   const changedPaths = new Set((await candidateChangedFiles()).filter(candidateOwnsInput));
   reportOutcome(baseline, removeGeneratedArtifacts(structuredClone(rawReport)), changedPaths);
 }
-
 function main() {
   runQualification().catch(reportQualificationFailure);
 }
@@ -389,8 +393,6 @@ function reportQualificationFailure(error) {
   process.exitCode = 1;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main();
-}
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
 
 export { compareReports, parseJson, removeGeneratedArtifacts, validateReport };

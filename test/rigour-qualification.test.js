@@ -1,9 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareReports, parseJson, removeGeneratedArtifacts, validateReport } from '../scripts/rigour-qualification.js';
+import { compareReports, parseJson, protectedPathChanges, removeGeneratedArtifacts, validateReport } from '../scripts/rigour-qualification.js';
 
 const finding = (overrides = {}) => ({ id: 'AST_COMPLEXITY', title: "Function 'example' has cyclomatic complexity of 12", severity: 'medium', provenance: 'traditional', files: ['src/example.js'], ...overrides });
 const report = (failures = []) => ({ status: 'FAIL', summary: { 'ast-analysis': 'FAIL' }, failures, stats: { score: failures.length ? 80 : 44, duration_ms: 1, severity_breakdown: {}, provenance_breakdown: {} } });
+
+test('changed protected workflow paths require review even without a raw scanner finding', () => {
+  assert.deepEqual(protectedPathChanges(new Set(['.github/workflows/ci.yml'])), ['.github/workflows/ci.yml']);
+  assert.deepEqual(protectedPathChanges(new Set(['src/sync.js'])), []);
+  assert.equal(compareReports(report(), report()).length, 0);
+});
 
 test('unchanged inherited findings qualify without altering raw FAIL', () => {
   const base = report([finding()]);
@@ -19,6 +25,12 @@ test('introduced and worsened findings fail comparison', () => {
   assert.equal(compareReports(report([finding()]), report([finding({ severity: 'high' })])).length, 1);
   assert.equal(compareReports(report([finding()]), report([finding({ title: "Function 'example' has cyclomatic complexity of 13 (max: 10)" })])).length, 1);
   assert.equal(compareReports(report([finding({ severity: 'medium' })]), report([finding({ severity: 'high' })])).length, 1);
+});
+
+test('new aggregate findings fail when the baseline has none', () => {
+  const base = report();
+  const candidate = report([{ id: 'file-size', title: 'File Size Limit', severity: 'low', provenance: 'traditional', files: ['scripts/new.js (401 lines)'] }]);
+  assert.equal(compareReports(base, candidate).length, 1);
 });
 
 test('aggregated findings with new candidate paths are rejected', () => {
