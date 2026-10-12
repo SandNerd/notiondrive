@@ -24,8 +24,8 @@ export function compareErrorHandlingAggregate(current, baseline, changedPaths, n
   const baselinePaths = new Set(normalizedPaths(previous));
   const implicatedChangedPaths = candidatePaths.filter((path) => !baselinePaths.has(path) && changedPaths.has(path));
   const addedCount = [...newCounts.counts].reduce((total, [strategy, count]) => total + Math.max(0, count - (oldCounts.counts.get(strategy) ?? 0)), 0);
-  if (!addedCount) return null;
   if (implicatedChangedPaths.length) return { ...current, files: implicatedChangedPaths };
+  if (!addedCount) return null;
   const changedFilesInDetails = [...current.details.matchAll(/(?:^|,\s*)([^,\n]+\.(?:js|cjs|mjs|ts|tsx|jsx))/g)].map((match) => match[1].trim()).filter((path) => changedPaths.has(path));
   if (changedFilesInDetails.length) return { ...current, files: changedFilesInDetails };
   if (affectedPaths.length) return { ...current, files: affectedPaths };

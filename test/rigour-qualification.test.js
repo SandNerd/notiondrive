@@ -89,6 +89,14 @@ test('unattributable aggregate increases fail closed against changed candidate i
   assert.deepEqual(compareReports(report([baseline]), report([candidate]), new Set(['scripts/a.js'])), [candidate]);
 });
 
+test('same-count error-handling file relocation is a regression through qualification', async () => {
+  const previous = finding({ id: 'inconsistent-error-handling', title: 'Inconsistent Error Handling', severity: 'high', provenance: 'ai-drift', line: 33, files: ['src/old.js'], details: "Inconsistent error handling for 'try-catch': 1 different strategies found across 1 files:\\n  • rethrow (5x): src/old.js" });
+  const relocated = { ...previous, files: ['src/new.js'], details: previous.details.replaceAll('src/old.js', 'src/new.js') };
+  const result = await classifyQualification(report([previous]), report([relocated]), new Set(['src/old.js', 'src/new.js']));
+  assert.equal(result.status, 'FAIL');
+  assert.deepEqual(result.implementationFindings.map((item) => item.files), [['src/new.js']]);
+});
+
 test('error-handling aggregate strategy counts are mapped by name rather than report order', () => {
   const baseline = finding({ id: 'inconsistent-error-handling', title: 'Inconsistent Error Handling', provenance: 'ai-drift', line: 33, details: "Inconsistent error handling: 2 strategies\n  • other (169x): scripts/a.js\n  • log (1x): scripts/b.js", files: ['scripts/a.js', 'scripts/b.js'] });
   const reordered = { ...baseline, details: `Inconsistent error handling: 2 strategies\n  • log (1x): scripts/b.js\n  • other (169x): scripts/a.js` };
