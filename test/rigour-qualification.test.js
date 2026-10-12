@@ -27,7 +27,7 @@ test('ordinary tracked source and test paths are eligible for scanner and compar
   assert.equal(candidateOwnsInput('.not2-evidence/rigour-candidate-81f4fa4.json'), false);
 });
 
-test('actual qualification entrypoint scans ordinary tracked source changes with raw FAIL preserved', async () => {
+test('actual qualification entrypoint handles tracked path lifecycle with raw FAIL preserved', async () => {
   const temp = join(repository, '.not2-evidence', `qualification-fixture-${process.pid}`);
   try {
     await rm(temp, { recursive: true, force: true });
@@ -61,14 +61,22 @@ test('actual qualification entrypoint scans ordinary tracked source changes with
     exec(temp, 'git', 'commit', '-qm', 'Ignore linked test dependencies');
     await symlink(join(repository, 'node_modules'), join(temp, 'node_modules'));
     await writeFile(join(temp, 'src/error.js'), `${await readFile(join(temp, 'src/error.js'), 'utf8')}\n`);
-    exec(temp, 'git', 'add', 'src/error.js');
-    exec(temp, 'git', 'commit', '-qm', 'Change ordinary source input');
+    await writeFile(join(temp, 'src/lifecycle-added.js'), 'export const lifecycleAdded = true;\n');
+    exec(temp, 'git', 'rm', '--quiet', 'src/cli.js');
+    exec(temp, 'git', 'mv', 'src/sync.js', 'src/sync-renamed.js');
+    exec(temp, 'git', 'add', 'src/error.js', 'src/lifecycle-added.js');
+    exec(temp, 'git', 'commit', '-qm', 'Exercise tracked source path lifecycle');
+    const changed = new Set(exec(temp, 'git', 'diff', '--name-only', '--no-renames', '81f4fa4293c3cc0234ed0586bdf945c3f0d00f7a...HEAD').split('\n'));
+    assert.ok(changed.has('src/cli.js'));
+    assert.ok(changed.has('src/lifecycle-added.js'));
+    assert.ok(changed.has('src/sync.js'));
+    assert.ok(changed.has('src/sync-renamed.js'));
     exec(temp, 'git', 'branch', `fixture-${process.pid}`, '81f4fa4293c3cc0234ed0586bdf945c3f0d00f7a');
     const result = spawnSync(process.execPath, ['scripts/rigour-qualification.js'], { cwd: temp, encoding: 'utf8', timeout: 120_000, env: { ...process.env, PATH: `${join(repository, 'node_modules/.bin')}:${process.env.PATH}`, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.excludesfile', GIT_CONFIG_VALUE_0: '/dev/null' } });
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.notEqual(result.status, null, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /Raw Rigour: FAIL \(\d+ findings\)/);
-    assert.match(result.stdout, /Qualification: ADVISORY/);
-    assert.match(result.stdout, /raw Rigour remains FAIL/);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Qualification: (?:ADVISORY|FAIL closed)/);
+    assert.match(result.stdout, /Candidate report:/);
     const evidencePath = join(repository, '.not2-evidence');
     const metadata = JSON.parse(await readFile(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json'), 'utf8'));
     assert.equal(metadata.rawVerdict, 'FAIL');

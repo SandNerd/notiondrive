@@ -274,9 +274,10 @@ async function validateInputSet() {
   const evidenceChanged = touched.some((file) => qualificationFiles.has(file) && !localCandidateEvidence.test(file) && !transientEvidencePath(file) && !file.startsWith('.not2-evidence/rigour-main-'));
   if (evidenceChanged) throw new Error('Candidate scanner inputs overlap qualification evidence; independent review is required');
   if (touched.includes('rigour.yml')) throw new Error('Scanner configuration changed; independent review is required');
-  const tracked = new Set(runCommand('git', ['ls-files', '-z']).split('\0').filter(Boolean));
+  const candidateTracked = new Set(runCommand('git', ['ls-files', '-z']).split('\0').filter(Boolean));
+  const baselineTracked = new Set(runCommand('git', ['ls-tree', '-r', '--name-only', '-z', baselineRevision]).split('\0').filter(Boolean));
   const candidateInputs = touched.filter((file) => !qualificationFiles.has(file) && !transientEvidencePath(file) && !localCandidateEvidence.test(file));
-  if (candidateInputs.some((file) => !tracked.has(file) && !removedBaselinePaths.has(file))) throw new Error('Candidate scanner inputs include an untracked path');
+  if (candidateInputs.some((file) => !candidateTracked.has(file) && !baselineTracked.has(file))) throw new Error('Candidate scanner inputs include an untracked path');
   const head = runCommand('git', ['rev-parse', 'HEAD']).trim();
   const baselineInHistory = spawnSync('git', ['merge-base', '--is-ancestor', baselineRevision, head], { cwd: root }).status === 0;
   const workflowPath = resolve(root, '.github/workflows/ci.yml');
