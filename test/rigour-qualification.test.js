@@ -75,7 +75,7 @@ test('actual qualification entrypoint handles tracked path lifecycle with raw FA
     const result = spawnSync(process.execPath, ['scripts/rigour-qualification.js'], { cwd: temp, encoding: 'utf8', timeout: 120_000, env: { ...process.env, PATH: `${join(repository, 'node_modules/.bin')}:${process.env.PATH}`, GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.excludesfile', GIT_CONFIG_VALUE_0: '/dev/null' } });
     assert.notEqual(result.status, null, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /Raw Rigour: FAIL \(\d+ findings\)/);
-    assert.match(`${result.stdout}\n${result.stderr}`, /Qualification: (?:ADVISORY|FAIL closed)/);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Qualification: FAIL closed \(Baseline finding identity is ambiguous; maintainer review is required\)/);
     assert.match(result.stdout, /Candidate report:/);
     const evidencePath = join(repository, '.not2-evidence');
     const metadata = JSON.parse(await readFile(join(temp, '.not2-evidence/rigour-candidate-81f4fa4.json.metadata.json'), 'utf8'));
